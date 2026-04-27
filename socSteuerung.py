@@ -232,10 +232,17 @@ class DBusInterface:
         """Connect to the system D-Bus."""
         self.bus: Any = dbus.SystemBus()
 
+    def get_bus_item(self, service: str, path: str) -> Any:
+        """Return a D-Bus BusItem proxy without slow or fragile introspection."""
+        try:
+            return self.bus.get_object(service, path, introspect=False)
+        except TypeError:
+            return self.bus.get_object(service, path)
+
     def get_value(self, service: str, path: str, default: Optional[float] = 0.0) -> Optional[float]:
         """Read a measured numeric D-Bus value and hide invalid None/-1 readings."""
         try:
-            obj = self.bus.get_object(service, path)
+            obj = self.get_bus_item(service, path)
             try:
                 val = obj.GetValue(
                     dbus_interface='com.victronenergy.BusItem',
@@ -254,7 +261,7 @@ class DBusInterface:
     def get_raw_value(self, service: str, path: str, default: Optional[float] = None) -> Optional[float]:
         """Read a raw D-Bus value without treating -1 as invalid."""
         try:
-            obj = self.bus.get_object(service, path)
+            obj = self.get_bus_item(service, path)
             try:
                 val = obj.GetValue(
                     dbus_interface='com.victronenergy.BusItem',
@@ -272,7 +279,7 @@ class DBusInterface:
         """Write a D-Bus value, preserving explicit dbus.* types when provided."""
         try:
             value = self.coerce_dbus_value(value)
-            obj = self.bus.get_object(service, path)
+            obj = self.get_bus_item(service, path)
             self.set_bus_item_value(obj, value)
             return True
         except Exception as e:
