@@ -1,6 +1,6 @@
 # venus-ess-winter-soc-service
 
-[![Tests](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml/badge.svg)](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml)
+[![Tests](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml?query=branch%3Amain)
 [![codecov](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service/branch/main/graph/badge.svg)](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service)
 
 Victron Venus OS service for seasonal ESS minimum SoC control, winter battery protection, adaptive low-load charging windows, and temporary DVCC charge-current limiting with RAM-first state handling and low-wear SD persistence for Venus OS / Cerbo GX systems.
