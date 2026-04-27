@@ -19,11 +19,6 @@ from datetime import datetime
 # SoC, it may defer or limit charging to low-load windows so the grid is treated
 # gently without compromising the seasonal battery-protection goal.
 #
-# The temporary DVCC charge-current limit is a comfort preference, not a hard
-# safety boundary: the script prefers the soft grid import target, but it can
-# still allow a minimum progress current so seasonal battery protection does not
-# stall indefinitely.
-#
 # Seasonal policy summary:
 # - Summer/default: use 10% MinSoC and preserve temporary manual overrides.
 # - Pre-winter low PV: stage a reserve raise toward 40%.
