@@ -1,4 +1,8 @@
 # venus-ess-winter-soc-service
+
+[![Tests](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml/badge.svg)](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service/branch/main/graph/badge.svg)](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service)
+
 Victron Venus OS service for seasonal ESS minimum SoC control, winter battery protection, adaptive low-load charging windows, and temporary DVCC charge-current limiting with RAM-first state handling and low-wear SD persistence for Venus OS / Cerbo GX systems.
 
 This service protects a battery during winter and transition periods by raising the ESS minimum SoC when PV production is no longer sufficient to regularly bring the battery into a healthy higher SoC range. It does **not** try to maximize comfort or avoid every bit of grid import. The primary goal is battery protection while grid-friendly charging is treated as a soft preference.
@@ -309,7 +313,32 @@ Battery protection, inverter limits, charger limits, fuse ratings, grid-code com
 
 ## Recommended Testing
 
-Before running unattended, test these cases:
+The repository includes unit tests, 100% coverage enforcement for
+`socSteuerung.py`, Radon cyclomatic-complexity checks, and strict `mypy` /
+`pyright` type checks for the controller and helper scripts. GitHub Actions
+runs these checks on pushes and pull requests and uploads `coverage.xml` to
+Codecov.
+
+Codecov expects a GitHub repository secret named:
+
+```text
+CODECOV_TOKEN
+```
+
+Local check:
+
+```bash
+python3 -m unittest discover -s tests
+python3 -m mypy
+python3 -m pyright
+python3 -m coverage run -m unittest
+python3 -m coverage report
+python3 -m coverage xml
+python3 -m radon cc socSteuerung.py -s -a
+python3 scripts/check_radon_a.py
+```
+
+Before running unattended on Venus OS, test these cases:
 
 - Summer/default mode returns to `10%`
 - Manual MinSoC changes outside seasonal windows are preserved temporarily

@@ -1,0 +1,13 @@
+{
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.11",
+  "include": [
+    "socSteuerung.py",
+    "scripts"
+  ],
+  "extraPaths": [
+    "typings"
+  ],
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none"
+}

@@ -241,6 +241,10 @@ class StateAndSdTests(unittest.TestCase):
             good.write_text('{"ts": 2, "last_mode": "X"}', encoding="utf-8")
             self.assertEqual(c.read_state_file(good)["last_mode"], "X")
             self.assertIsNone(c.read_state_file(root / "missing.json"))
+            not_object = root / "list.json"
+            not_object.write_text("[1, 2, 3]", encoding="utf-8")
+            self.assertIsNone(c.read_state_file(not_object))
+            self.assertTrue(any("does not contain a JSON object" in msg for msg in c.dbus.logs))
 
             bad = root / "bad.json"
             bad.write_text("{bad", encoding="utf-8")
@@ -768,6 +772,8 @@ class RuntimeLogicTests(unittest.TestCase):
             self.assertEqual(c.determine_target_soc(123), (M.DEFAULT_SOC, "Default"))
         c.state["pv_history"] = [1]
         self.assertIsNone(c.transition_history_ready())
+        c.state["pv_history"] = "not-a-list"
+        self.assertIsNone(c.transition_history_ready())
         self.assertFalse(c.has_transition_history_below_threshold())
         self.assertFalse(c.has_transition_history_above_threshold())
         c.state["balancing_active"] = False
@@ -782,6 +788,7 @@ class RuntimeLogicTests(unittest.TestCase):
     def test_pv_history_manual_override_context_and_apply(self):
         c = controller()
         c.save_state_to_ram = mock.Mock()
+        self.assertFalse(c.same_min_soc(10.0, None))
         c.state["last_sample_date"] = "2026-01-01"
         c.state["pv_energy_ws"] = 600
         c.state["pv_time_s"] = 2
