@@ -3,9 +3,7 @@
 [![Tests](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml?query=branch%3Amain)
 [![codecov](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service/branch/main/graph/badge.svg)](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service)
 
-Victron Venus OS service for seasonal ESS minimum SoC control, winter battery protection, adaptive low-load charging windows, and temporary DVCC charge-current limiting with RAM-first state handling and low-wear SD persistence for Venus OS / Cerbo GX systems.
-
-This service protects a battery during winter and transition periods by raising the ESS minimum SoC when PV production is no longer sufficient to regularly bring the battery into a healthy higher SoC range. It does **not** try to maximize comfort or avoid every bit of grid import. The primary goal is battery protection while grid-friendly charging is treated as a soft preference.
+This Victron Venus OS service protects a battery during winter and transition periods by raising the ESS minimum SoC when PV production is no longer sufficient to regularly bring the battery into a healthy higher SoC range. The primary goal is battery protection while grid-friendly charging is treated as a soft preference.
 
 The controller can also apply a temporary DVCC `MaxChargeCurrent` limit while it is actively raising SoC. This limit is restored when the controller no longer needs it.
 
@@ -29,7 +27,7 @@ The controller can also apply a temporary DVCC `MaxChargeCurrent` limit while it
 
 In winter, PV production may not be sufficient to regularly charge the battery to a healthy higher SoC. Keeping a battery at low SoC for long periods can be undesirable for battery ageing and general battery care.
 
-This controller raises the Victron ESS minimum SoC seasonally so the battery is not left at low SoC for extended periods.
+To avoid that risk, venus-ess-winter-soc-service raises the Victron ESS minimum SoC seasonally so the battery is not left at low SoC for extended periods.
 
 The raised target does not need to be reached immediately. If the battery reaches the target one night later, that is usually acceptable. Therefore, the controller stages SoC increases through adaptive charge windows and uses a soft grid import target where possible.
 
