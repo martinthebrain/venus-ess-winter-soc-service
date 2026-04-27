@@ -3,7 +3,7 @@
 [![Tests](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/martinthebrain/venus-ess-winter-soc-service/actions/workflows/tests.yml?query=branch%3Amain)
 [![codecov](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service/branch/main/graph/badge.svg)](https://codecov.io/gh/martinthebrain/venus-ess-winter-soc-service)
 
-This Victron Venus OS service protects a battery during winter and transition periods by raising the ESS minimum SoC when PV production is no longer sufficient to regularly bring the battery into a healthy higher SoC range. The primary goal is battery protection while grid-friendly charging is treated as a soft preference.
+This Victron Venus OS service protects a battery during winter and transition periods by raising the ESS minimum SoC when PV production is no longer sufficient to regularly bring the battery into a healthy higher SoC range. 
 
 The controller can also apply a temporary DVCC `MaxChargeCurrent` limit while it is actively raising SoC. This limit is restored when the controller no longer needs it.
 
@@ -29,7 +29,7 @@ In winter, PV production may not be sufficient to regularly charge the battery t
 
 To avoid that risk, venus-ess-winter-soc-service raises the Victron ESS minimum SoC seasonally so the battery is not left at low SoC for extended periods.
 
-The raised target does not need to be reached immediately. If the battery reaches the target one night later, that is usually acceptable. Therefore, the controller stages SoC increases through adaptive charge windows and uses a soft grid import target where possible.
+The raised target does not need to be reached immediately. If the battery reaches the target one night later, that is usually acceptable. Therefore, the controller stages SoC increases through adaptive charge windows and uses a soft grid import target where possible. The primary goal is battery protection while grid-friendly charging is treated as a soft preference.
 
 ## Seasonal Policy
 
@@ -68,7 +68,7 @@ With the default configuration, the charging window can grow from 4 hours to 8 h
 
 This makes the controller gentle at first, but increasingly determined when the battery protection target is not reached.
 
-## Grid Import Target
+## Temporary Charge Current Limiting
 
 The grid import target is intentionally soft:
 
@@ -327,6 +327,7 @@ Local check:
 
 ```bash
 python3 -m unittest discover -s tests
+python3 scripts/dbus_scenario_simulator.py
 python3 -m mypy
 python3 -m pyright
 python3 -m coverage run -m unittest
@@ -335,6 +336,47 @@ python3 -m coverage xml
 python3 -m radon cc socSteuerung.py -s -a
 python3 scripts/check_radon_a.py
 ```
+
+Offline D-Bus scenario simulation:
+
+```bash
+python3 scripts/dbus_scenario_simulator.py
+python3 scripts/dbus_scenario_simulator.py --verbose
+python3 scripts/dbus_scenario_simulator.py no-battery-fails-safe dvcc-capture-and-restore
+```
+
+After installation on Venus OS, the same simulator is available at:
+
+```bash
+python3 /data/etc/venus-ess-winter-soc-service/scripts/dbus_scenario_simulator.py
+```
+
+The simulator does not publish a real D-Bus service and does not touch live
+Victron settings. It imports the controller with an in-memory D-Bus facade and
+checks normal operation plus failure scenarios such as missing SoC, invalid
+MinSoC, missing BMS charge current, D-Bus write failures, manual DVCC limits,
+external DVCC takeover, staged 40%/65% targets, and DVCC capture/restore.
+
+Live D-Bus testbed for Venus OS insitu test:
+
+```bash
+svc -d /service/venus-ess-winter-soc-service
+python3 /data/etc/venus-ess-winter-soc-service/scripts/live_dbus_testbed.py
+```
+
+The live testbed publishes simulated Victron services on the real system D-Bus
+using names ending in `.sim`, then runs controller iterations against those
+fake services. It does not use the real `com.victronenergy.system` or
+`com.victronenergy.settings` services.
+
+For manual live testing, keep the fake services running:
+
+```bash
+python3 /data/etc/venus-ess-winter-soc-service/scripts/live_dbus_testbed.py --serve
+```
+
+The script prints an `ESS_SERVICE_*` command that starts the controller against
+the fake services in another shell.
 
 Before running unattended on Venus OS, test these cases:
 

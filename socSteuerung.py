@@ -50,10 +50,15 @@ from datetime import datetime
 STATE_FILE = "/dev/shm/ess_winter_logic.json"
 LOG_FILE = "/dev/shm/ess_winter_log.txt"  # RAM diagnostics log, also volatile.
 
-# D-Bus services used by Victron Venus OS.
-SERVICE_SETTINGS = 'com.victronenergy.settings'
-SERVICE_SYSTEM = 'com.victronenergy.system'
-PREFERRED_BATTERY_SERVICE = 'com.victronenergy.battery.socketcan_vecan1'
+# D-Bus services used by Victron Venus OS. The environment overrides are only
+# meant for testbeds that publish simulated services on the system bus. Normal
+# installations should leave them unset.
+SERVICE_SETTINGS = os.getenv("ESS_SERVICE_SETTINGS", 'com.victronenergy.settings')
+SERVICE_SYSTEM = os.getenv("ESS_SERVICE_SYSTEM", 'com.victronenergy.system')
+PREFERRED_BATTERY_SERVICE = os.getenv(
+    "ESS_PREFERRED_BATTERY_SERVICE",
+    'com.victronenergy.battery.socketcan_vecan1',
+)
 
 # Thresholds and timing constants for SoC policy, balancing, grid protection,
 # diagnostics, and persistence.

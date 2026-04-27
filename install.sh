@@ -72,10 +72,14 @@ install_file() {
 install_files() {
     ensure_source_file "socSteuerung.py"
     ensure_source_file "service/run"
+    ensure_source_file "scripts/dbus_scenario_simulator.py"
+    ensure_source_file "scripts/live_dbus_testbed.py"
     ensure_source_file "uninstall.sh"
     mkdir -p "${INSTALL_DIR}"
     install_file "socSteuerung.py" 755
     install_file "service/run" 755
+    install_file "scripts/dbus_scenario_simulator.py" 755   
+    install_file "scripts/live_dbus_testbed.py" 755
     install_file "uninstall.sh" 755
     install_file "install.sh" 755
 }

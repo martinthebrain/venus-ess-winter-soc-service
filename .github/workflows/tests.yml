@@ -36,6 +36,9 @@ jobs:
       - name: Run unit tests
         run: python -m xmlrunner discover -s tests -o test-results
 
+      - name: Run offline D-Bus scenario simulator
+        run: python scripts/dbus_scenario_simulator.py
+
       - name: Run coverage
         run: python -m coverage run -m unittest
 
