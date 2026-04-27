@@ -1,0 +1,7 @@
+[run]
+include =
+    */socSteuerung.py
+
+[report]
+fail_under = 100
+show_missing = True

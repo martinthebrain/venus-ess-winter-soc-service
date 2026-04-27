@@ -1,0 +1,8 @@
+#!/bin/sh
+# runit entrypoint for Venus OS. The service directory is installed under
+# /data/etc so it survives firmware updates, while /service only contains a
+# boot-time symlink created by install.sh and /data/rc.local.
+
+exec 2>&1
+echo "Starting venus-ess-winter-soc-service"
+exec /usr/bin/python3 /data/etc/venus-ess-winter-soc-service/socSteuerung.py
