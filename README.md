@@ -29,7 +29,28 @@ In winter, PV production may not be sufficient to regularly charge the battery t
 
 To avoid that risk, venus-ess-winter-soc-service raises the Victron ESS minimum SoC seasonally so the battery is not left at low SoC for extended periods.
 
-The raised target does not need to be reached immediately. If the battery reaches the target one night later, that is usually acceptable. Therefore, the controller stages SoC increases through adaptive charge windows and uses a soft grid import target where possible. The primary goal is battery protection while grid-friendly charging is treated as a soft preference.
+The raised target does not need to be reached immediately. If the battery reaches the target one night later, that is usually acceptable. Therefore, the controller stages SoC increases through adaptive charge windows and uses a soft grid import target where possible.
+
+## BatteryLife vs this service
+
+Victron BatteryLife is the recommended built-in solution for many ESS systems. It dynamically raises and lowers the active SoC limit to help the battery regularly return to a high state of charge.
+
+This service has a different goal: predictable seasonal reserve management.
+
+Use BatteryLife if:
+- you want the standard Victron behaviour
+- you want an adaptive algorithm that manages the active SoC limit automatically
+- you do not need fixed winter/transition targets
+
+Use this service if:
+- you want deterministic seasonal MinSoC targets
+- you want PV-history-based transition behaviour
+- you want staged winter reserve building
+- you want adaptive low-load charging windows
+- you want temporary DVCC charge-current limiting while building reserve
+- you do not want to use Venus OS Large, Node-RED, or Signal K
+
+This project is not a claim that LFP batteries should always be kept at high SoC. Higher SoC can increase calendar aging depending on temperature, chemistry, and usage pattern. The winter target is a configurable reserve-management policy, not a universal battery-health optimum.
 
 ## Seasonal Policy
 
@@ -305,7 +326,7 @@ Use it only if you understand:
 - Venus OS D-Bus service paths
 - Your battery manufacturer's requirements
 
-The grid import target in this script is a soft comfort preference.
+The grid import target is only used to calculate temporary charge-current limiting.
 
 Battery protection, inverter limits, charger limits, fuse ratings, grid-code compliance, and battery manufacturer limits must be handled by the Victron system configuration and the battery/BMS itself.
 
@@ -357,7 +378,7 @@ checks normal operation plus failure scenarios such as missing SoC, invalid
 MinSoC, missing BMS charge current, D-Bus write failures, manual DVCC limits,
 external DVCC takeover, staged 40%/65% targets, and DVCC capture/restore.
 
-Live D-Bus testbed for Venus OS insitu test:
+Live D-Bus testbed for Venus OS in-situ test:
 
 ```bash
 svc -d /service/venus-ess-winter-soc-service
