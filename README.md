@@ -52,6 +52,24 @@ Use this service if:
 
 This project is not a claim that LFP batteries should always be kept at high SoC. Higher SoC can increase calendar aging depending on temperature, chemistry, and usage pattern. The winter target is a configurable reserve-management policy, not a universal battery-health optimum.
 
+## Relation to Node-RED
+
+The same basic behaviour can also be implemented with Node-RED, especially on systems already running Venus OS Large.
+
+This service is intended for users who prefer a small standalone Python/runit service without requiring Venus OS Large, Node-RED, Signal K, dashboards, or external automation infrastructure.
+
+Node-RED may be the better choice if:
+- you already use Venus OS Large
+- you prefer visual/flow-based automation
+- you only need a simple MinSoC schedule
+
+This service may be useful if:
+- you want deterministic seasonal MinSoC targets
+- you want PV-production-based seasonal transitions
+- you want adaptive charge windows
+- you want temporary DVCC charge-current limiting
+- you prefer versioned service code over maintaining a flow
+
 ## Seasonal Policy
 
 Default configuration:
