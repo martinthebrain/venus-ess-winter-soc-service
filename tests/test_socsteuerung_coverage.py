@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+from tests.test_socsteuerung_logic import M, charge_context
+
 from venus_ess_winter_soc_service import dbus_iface as DBUS_MOD
 from venus_ess_winter_soc_service import dvcc as DVCC_MOD
 from venus_ess_winter_soc_service import persistence as PERSISTENCE_MOD
@@ -16,8 +18,6 @@ from venus_ess_winter_soc_service import socpolicy as SOC_POLICY_MOD
 from venus_ess_winter_soc_service import storage as STORAGE_MOD
 from venus_ess_winter_soc_service import tracking as TRACKING_MOD
 from venus_ess_winter_soc_service import windows as WINDOWS_MOD
-
-from tests.test_socsteuerung_logic import M, charge_context
 
 
 class RichDbusStub:
