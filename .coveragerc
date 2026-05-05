@@ -1,6 +1,8 @@
 [run]
+branch = True
 include =
     */socSteuerung.py
+    */venus_ess_winter_soc_service/*.py
 
 [report]
 fail_under = 100

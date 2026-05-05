@@ -9,6 +9,14 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+from venus_ess_winter_soc_service import dbus_iface as DBUS_MOD
+from venus_ess_winter_soc_service import dvcc as DVCC_MOD
+from venus_ess_winter_soc_service import persistence as PERSISTENCE_MOD
+from venus_ess_winter_soc_service import socpolicy as SOC_POLICY_MOD
+from venus_ess_winter_soc_service import storage as STORAGE_MOD
+from venus_ess_winter_soc_service import tracking as TRACKING_MOD
+from venus_ess_winter_soc_service import windows as WINDOWS_MOD
+
 from tests.test_socsteuerung_logic import M, charge_context
 
 
@@ -72,14 +80,16 @@ def controller():
 
 class HelperAndDbusTests(unittest.TestCase):
     def test_every_controller_function_has_docstring(self):
-        source = Path(M.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        missing = [
-            f"{node.name}:{node.lineno}"
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and not ast.get_docstring(node)
-        ]
+        paths = [Path(M.__file__), *Path(M.__file__).resolve().parent.joinpath("venus_ess_winter_soc_service").glob("*.py")]
+        missing = []
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            missing.extend(
+                f"{path.name}:{node.name}:{node.lineno}"
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and not ast.get_docstring(node)
+            )
         self.assertEqual([], missing)
 
     def test_path_helpers_and_atomic_write(self):
@@ -124,14 +134,14 @@ class HelperAndDbusTests(unittest.TestCase):
             bad_root = mock.Mock()
             bad_root.exists.return_value = True
             bad_root.iterdir.side_effect = OSError("boom")
-            with mock.patch.object(M, "path_exists", return_value=True):
+            with mock.patch.object(STORAGE_MOD, "path_exists", return_value=True):
                 self.assertEqual(M.find_auto_sd([bad_root]), (None, ""))
             self.assertIsNone(M.find_auto_sd_in_root(root))
-            with mock.patch.object(M, "find_sd_from_env", return_value=(None, "")), \
-                 mock.patch.object(M, "find_auto_sd", return_value=(Path("/tmp/auto"), "auto")):
+            with mock.patch.object(STORAGE_MOD, "find_sd_from_env", return_value=(None, "")), \
+                 mock.patch.object(STORAGE_MOD, "find_auto_sd", return_value=(Path("/tmp/auto"), "auto")):
                 self.assertEqual(M.get_sd_path()[1], "auto")
-            with mock.patch.object(M, "find_sd_from_env", return_value=(None, "")), \
-                 mock.patch.object(M, "find_auto_sd", return_value=(None, "")):
+            with mock.patch.object(STORAGE_MOD, "find_sd_from_env", return_value=(None, "")), \
+                 mock.patch.object(STORAGE_MOD, "find_auto_sd", return_value=(None, "")):
                 self.assertEqual(M.get_sd_path(), (None, "No SD found"))
 
     def test_dbus_interface_success_fallbacks_and_logging(self):
@@ -213,9 +223,9 @@ class HelperAndDbusTests(unittest.TestCase):
 
         dbi.bus = FailingBus()
         with tempfile.TemporaryDirectory() as tmp, \
-             mock.patch.object(M, "LOG_FILE", str(Path(tmp) / "log.txt")), \
-             mock.patch.object(M, "LOG_MAX_BYTES", 1), \
-             mock.patch.object(M, "LOG_TRUNCATE_BYTES", 1):
+             mock.patch.object(DBUS_MOD, "LOG_FILE", str(Path(tmp) / "log.txt")), \
+             mock.patch.object(DBUS_MOD, "LOG_MAX_BYTES", 1), \
+             mock.patch.object(DBUS_MOD, "LOG_TRUNCATE_BYTES", 1):
             self.assertEqual(dbi.get_value("svc", "/p", 9), 9)
             self.assertIsNone(dbi.get_raw_value("svc", "/p", None))
             self.assertFalse(dbi.set_value("svc", "/p", 1))
@@ -227,7 +237,7 @@ class HelperAndDbusTests(unittest.TestCase):
         with mock.patch("builtins.open", side_effect=OSError("outer")):
             dbi.log("outer fail")
         with tempfile.TemporaryDirectory() as tmp, \
-             mock.patch.object(M, "LOG_FILE", str(Path(tmp) / "log.txt")), \
+             mock.patch.object(DBUS_MOD, "LOG_FILE", str(Path(tmp) / "log.txt")), \
              mock.patch.object(M.os.path, "getsize", side_effect=OSError("inner")):
             dbi.log("inner fail")
 
@@ -295,7 +305,7 @@ class StateAndSdTests(unittest.TestCase):
             c.is_sd_window = lambda _now=None: True
             c.is_winter_window = lambda _now=None: True
             c.is_pv_history_window = lambda _now=None: False
-            with mock.patch.object(M, "STATE_FILE", str(ram)):
+            with mock.patch.object(PERSISTENCE_MOD, "STATE_FILE", str(ram)):
                 loaded = c.load_state()
                 self.assertEqual(loaded["last_mode"], "RAM")
                 self.assertEqual(loaded["last_balance_ts"], 5)
@@ -311,7 +321,7 @@ class StateAndSdTests(unittest.TestCase):
             }), encoding="utf-8")
             c.sd_last_signature = {"from": "old-sd"}
             c.sd_last_persist_ts = 2
-            with mock.patch.object(M, "STATE_FILE", str(ram)):
+            with mock.patch.object(PERSISTENCE_MOD, "STATE_FILE", str(ram)):
                 loaded = c.load_state()
                 self.assertEqual(loaded["last_mode"], "RAM-newer")
                 self.assertEqual(loaded["last_balance_ts"], 9)
@@ -328,14 +338,14 @@ class StateAndSdTests(unittest.TestCase):
                 "charging_mode_active": True,
             }), encoding="utf-8")
             c.is_sd_window = lambda _now=None: False
-            with mock.patch.object(M, "STATE_FILE", str(ram)):
+            with mock.patch.object(PERSISTENCE_MOD, "STATE_FILE", str(ram)):
                 loaded = c.load_state()
                 self.assertEqual(loaded["last_balance_ts"], 1)
                 self.assertFalse(loaded["max_charge_current_raw_set"])
             c.is_sd_window = lambda _now=None: True
             sd.write_text(json.dumps({"ts": 2, "last_balance_ts": 7}), encoding="utf-8")
             ram.unlink()
-            with mock.patch.object(M, "STATE_FILE", str(ram)):
+            with mock.patch.object(PERSISTENCE_MOD, "STATE_FILE", str(ram)):
                 loaded = c.load_state()
                 self.assertEqual(loaded["last_balance_ts"], 7)
 
@@ -429,17 +439,17 @@ class StateAndSdTests(unittest.TestCase):
                 before = c.sd_last_lookup_ts
                 c.refresh_sd_paths(force=False)
                 self.assertEqual(c.sd_last_lookup_ts, before)
-            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(M, "get_sd_path", return_value=(None, "none")):
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(PERSISTENCE_MOD, "get_sd_path", return_value=(None, "none")):
                 c.refresh_sd_paths(force=True)
                 self.assertIsNone(c.sd_state_file)
 
             c.state["x"] = 1
             c.persist_state_to_sd = mock.Mock()
-            with mock.patch.object(M, "STATE_FILE", str(root / "ram.json")):
+            with mock.patch.object(PERSISTENCE_MOD, "STATE_FILE", str(root / "ram.json")):
                 c.save_state_to_ram(force_persist=True)
                 self.assertTrue((root / "ram.json").exists())
                 c.persist_state_to_sd.assert_called_with(force_persist=True)
-            with mock.patch.object(M, "atomic_write", side_effect=OSError("fail")):
+            with mock.patch.object(PERSISTENCE_MOD, "atomic_write", side_effect=OSError("fail")):
                 c.save_state_to_ram()
                 self.assertTrue(any("Could not save state" in msg for msg in c.dbus.logs))
 
@@ -521,10 +531,10 @@ class RuntimeLogicTests(unittest.TestCase):
         self.assertEqual(c.get_max_charge_current_raw(), 80)
         self.assertEqual(c.get_normal_charge_current(200), 80)
         c.state["normal_charge_current"] = None
-        with mock.patch.object(M, "NORMAL_CHARGE_CURRENT", 60):
+        with mock.patch.object(DVCC_MOD, "NORMAL_CHARGE_CURRENT", 60):
             self.assertEqual(c.get_normal_charge_current(200), 80)
         c.state["max_charge_current_raw_set"] = False
-        with mock.patch.object(M, "NORMAL_CHARGE_CURRENT", 60):
+        with mock.patch.object(DVCC_MOD, "NORMAL_CHARGE_CURRENT", 60):
             self.assertEqual(c.get_normal_charge_current(200), 60)
         c.state["normal_charge_current"] = 70
         self.assertEqual(c.get_normal_charge_current(200), 70)
@@ -539,7 +549,7 @@ class RuntimeLogicTests(unittest.TestCase):
         self.assertGreater(c.compute_charge_current_limit(1000, 200, None), 0)
         self.assertEqual(c.available_grid_charge_power(1500), M.GRID_LOAD_LIMIT - 1500 - M.GRID_PAUSE_HEADROOM_W)
         self.assertEqual(c.clamp_to_normal_current(300, 200), 200)
-        with mock.patch.object(M, "SAFE_CHARGE_CURRENT_A", None):
+        with mock.patch.object(DVCC_MOD, "SAFE_CHARGE_CURRENT_A", None):
             self.assertIsNone(c.compute_safe_charge_current(200))
 
     def test_capture_update_set_restore_and_status(self):
@@ -646,7 +656,7 @@ class RuntimeLogicTests(unittest.TestCase):
         self.assertEqual(c.dbus.sets[-1][2], 90.0)
         self.assertFalse(c.state["max_charge_current_raw_set"])
         c.restore_normal_charge_current(200)
-        with mock.patch.object(M, "NORMAL_CHARGE_CURRENT", -1):
+        with mock.patch.object(DVCC_MOD, "NORMAL_CHARGE_CURRENT", -1):
             c.restore_normal_charge_current(None)
             self.assertEqual(c.dbus.sets[-1][2], -1)
         c.restore_normal_charge_current(None)
@@ -749,7 +759,7 @@ class RuntimeLogicTests(unittest.TestCase):
         c.save_state_to_ram = mock.Mock()
         c.start_balancing(123)
         self.assertTrue(c.state["balancing_active"])
-        with mock.patch.object(M, "datetime", FixedDatetime):
+        with mock.patch.object(TRACKING_MOD, "datetime", FixedDatetime):
             FixedDatetime.value = datetime(2026, 1, 1, 12)
             c.should_start_balancing = lambda _ts: False
             self.assertEqual(c.determine_target_soc(123), (100.0, "Winter Balancing"))
@@ -816,7 +826,7 @@ class RuntimeLogicTests(unittest.TestCase):
         c.collect_pv_sample(200)
         c.reset_pv_sample_gap()
         self.assertEqual(c.state["pv_last_sample_ts"], 0)
-        with mock.patch.object(M, "datetime", FixedDatetime), mock.patch.object(M.time, "time", return_value=200):
+        with mock.patch.object(TRACKING_MOD, "datetime", FixedDatetime), mock.patch.object(M.time, "time", return_value=200):
             c.state["last_sample_date"] = "2026-01-02"
             c.roll_pv_day = mock.Mock()
             FixedDatetime.value = datetime(2026, 1, 3, 10)
@@ -863,7 +873,7 @@ class RuntimeLogicTests(unittest.TestCase):
         self.assertEqual(c.charge_window_hours(100 + (2 * 86400)), M.CHARGE_WINDOW_BASE_HOURS * 2)
         self.assertEqual(c.charge_window_hours(100 + (4 * 86400)), M.CHARGE_WINDOW_BASE_HOURS * 4)
         self.assertTrue(c.track_charge_deficit(False, 300))
-        with mock.patch.object(M, "CHARGE_WINDOW_BASE_HOURS", 24):
+        with mock.patch.object(SOC_POLICY_MOD, "CHARGE_WINDOW_BASE_HOURS", 24):
             self.assertTrue(c.is_charge_window_active(datetime(2026, 1, 1, 12), 400))
         self.assertFalse(c.should_stage_charge_target(10))
         self.assertTrue(c.should_stage_charge_target(40))
@@ -873,7 +883,7 @@ class RuntimeLogicTests(unittest.TestCase):
         self.assertTrue(c.is_sd_window())
         c.is_pv_history_window = M.WinterController.is_pv_history_window.__get__(c, M.WinterController)
         c.is_winter_window = M.WinterController.is_winter_window.__get__(c, M.WinterController)
-        with mock.patch.object(M, "datetime", FixedDatetime):
+        with mock.patch.object(WINDOWS_MOD, "datetime", FixedDatetime):
             FixedDatetime.value = datetime(2026, 11, 10, 12)
             self.assertTrue(c.is_pv_history_window())
             FixedDatetime.value = datetime(2026, 1, 1, 12)
@@ -1026,6 +1036,83 @@ class RuntimeLogicTests(unittest.TestCase):
         c.log_mode_change("Winter", 65)
         c.read_current_soc = mock.Mock(return_value=None)
         self.assertFalse(c.run_once())
+
+    def test_package_branch_edges(self):
+        c = controller()
+
+        class DInt32(int):
+            pass
+
+        dbi = M.DBusInterface.__new__(M.DBusInterface)
+        with mock.patch.object(M.dbus, "Int32", DInt32):
+            self.assertIsInstance(dbi.coerce_dbus_value(DInt32(7)), DInt32)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(DBUS_MOD, "LOG_FILE", str(Path(tmp) / "log.txt")), \
+             mock.patch.object(DBUS_MOD, "LOG_MAX_BYTES", 999999):
+            dbi.log("short")
+
+        self.assertEqual(c.first_normal_charge_current([0, None, 5]), 5)
+
+        c.is_pv_history_window = lambda _now=None: False
+        c.is_winter_window = lambda _now=None: False
+        self.assertEqual(c.sd_persistent_keys(), list(M.SD_PERSISTENT_BASE_KEYS))
+        c.init_sd_state_cache({"ts": 7})
+        self.assertEqual(c.sd_last_signature["max_charge_current_raw_set"], False)
+
+        c.save_state_to_ram = mock.Mock()
+        c.store_best_battery_service(["svc"], "svc")
+        c.dbus.values[("svc", "/Info/MaxChargeCurrent")] = 1
+        c.store_best_battery_service(["svc"], "svc")
+        c.dbus.values[("svc2", "/Info/MaxChargeCurrent")] = 0
+        self.assertIsNone(c.select_best_battery_service(["svc2"]))
+
+        c.state["last_soc_invalid_log_ts"] = M.time.time()
+        c.dbus.raw_values[(M.SERVICE_SYSTEM, "/Dc/Battery/Soc")] = None
+        self.assertIsNone(c.read_current_soc())
+        self.assertFalse(any("SoC invalid" in msg for msg in c.dbus.logs))
+
+        c.read_state_file = lambda _path: None
+        c.load_sd_state_window()
+        c.sd_window_active = False
+        c.apply_sd_window_transition(False)
+        self.assertFalse(c.sd_window_active)
+        c.update_full_soc_tracking = mock.Mock(return_value=False)
+        c.read_current_soc = mock.Mock(return_value=60)
+        c.determine_target_soc = mock.Mock(return_value=(10, "Default"))
+        c.apply_soc_logic = mock.Mock()
+        self.assertTrue(c.run_once())
+
+        c.state["charging_paused"] = True
+        c.state["charging_mode_active"] = True
+        self.assertFalse(c.pause_soc_raise("/min", 50, 30, 30))
+        c.finish_pause_soc_raise = mock.Mock()
+        c._handle_charge_needed(
+            "/min",
+            target_soc=50,
+            current_soc=30,
+            current_setting=30,
+            context=charge_context(time_ok=False),
+        )
+        c.finish_pause_soc_raise.assert_not_called()
+        c.clear_charge_state = mock.Mock(return_value=False)
+        c.restore_normal_charge_current = mock.Mock()
+        c._handle_charge_not_needed("/min", 10, 10, None)
+        c.restore_normal_charge_current.assert_called_with(None)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "not_sd").mkdir()
+            self.assertEqual(M.find_auto_sd([root]), (None, ""))
+
+        c.state["last_sample_date"] = "2026-01-01"
+        FixedDatetime.value = datetime(2026, 1, 1, 20)
+        with mock.patch.object(TRACKING_MOD, "datetime", FixedDatetime):
+            c.update_pv_history()
+        c.state["last_pv_integral_ts"] = 100
+        self.assertTrue(c.is_pv_fallback_old_enough(100 + M.PV_FALLBACK_MIN_VALID_AGE_DAYS * 86400))
+        c.state["pv_last_sample_ts"] = 100
+        c.integrate_pv_sample(100 + (M.LOOP_INTERVAL_SECONDS * 10), 20)
+        self.assertEqual(c.state["pv_energy_ws"], 0.0)
 
 
 if __name__ == "__main__":

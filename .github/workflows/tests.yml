@@ -40,7 +40,7 @@ jobs:
         run: python scripts/dbus_scenario_simulator.py
 
       - name: Run coverage
-        run: python -m coverage run -m unittest
+        run: python -m coverage run -m unittest discover -s tests
 
       - name: Report coverage
         run: python -m coverage report
@@ -49,9 +49,10 @@ jobs:
         run: python -m coverage xml
 
       - name: Check cyclomatic complexity
-        run: |
-          python -m radon cc socSteuerung.py -s -a
-          python scripts/check_radon_a.py
+        run: python scripts/check_radon_a.py
+
+      - name: Check package file lengths
+        run: python scripts/check_package_file_lengths.py
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

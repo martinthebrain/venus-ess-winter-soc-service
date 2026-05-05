@@ -3,6 +3,7 @@
   "pythonVersion": "3.11",
   "include": [
     "socSteuerung.py",
+    "venus_ess_winter_soc_service",
     "scripts"
   ],
   "extraPaths": [

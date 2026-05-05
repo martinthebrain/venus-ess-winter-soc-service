@@ -25,6 +25,13 @@ from typing import Any, Optional, Protocol, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 SOC_SCRIPT = ROOT / "socSteuerung.py"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+DATETIME_MODULES = (
+    "venus_ess_winter_soc_service.socpolicy",
+    "venus_ess_winter_soc_service.tracking",
+    "venus_ess_winter_soc_service.windows",
+)
 
 
 class ControllerModule(Protocol):
@@ -192,13 +199,33 @@ class SimulatedDatetime:
 @contextmanager
 def simulated_date(value: datetime) -> Generator[None, None, None]:
     """Temporarily replace the controller module's datetime class."""
-    previous = M.datetime
+    previous = controller_datetime_values()
     SimulatedDatetime.now_value = value
-    M.datetime = SimulatedDatetime
+    set_controller_datetime(SimulatedDatetime)
     try:
         yield
     finally:
-        M.datetime = previous
+        restore_controller_datetime(previous)
+
+
+def controller_datetime_values() -> dict[str, Any]:
+    """Return current datetime objects from controller modules."""
+    return {
+        module_name: getattr(sys.modules[module_name], "datetime")
+        for module_name in DATETIME_MODULES
+    }
+
+
+def set_controller_datetime(value: Any) -> None:
+    """Set the datetime object in every date-sensitive controller module."""
+    for module_name in DATETIME_MODULES:
+        setattr(sys.modules[module_name], "datetime", value)
+
+
+def restore_controller_datetime(previous: dict[str, Any]) -> None:
+    """Restore datetime objects after a simulated scenario date."""
+    for module_name, value in previous.items():
+        setattr(sys.modules[module_name], "datetime", value)
 
 
 @dataclass
@@ -339,9 +366,8 @@ class Harness:
         dbus: Optional[FakeDbus] = None,
     ) -> ScenarioOutcome:
         """Build a result from boolean checks and optional log context."""
-        details = [message for ok, message in checks if not ok]
-        if details and dbus is not None and dbus.logs:
-            details.append("recent logs: " + " | ".join(dbus.logs[-5:]))
+        details = failed_check_messages(checks)
+        append_recent_logs(details, dbus)
         return ScenarioOutcome(name=name, passed=not details, details=details)
 
 
@@ -580,29 +606,65 @@ SCENARIOS: list[Scenario] = [
 
 def selected_scenarios(names: list[str]) -> list[Scenario]:
     """Return scenarios selected by CLI names."""
-    if not names or "all" in names:
-        return SCENARIOS
-    known = {scenario.name: scenario for scenario in SCENARIOS}
-    missing = [name for name in names if name not in known]
-    if missing:
-        raise SystemExit(f"Unknown scenario(s): {', '.join(missing)}")
-    return [known[name] for name in names]
+    return select_scenarios(names, SCENARIOS)
 
 
 def run_scenarios(scenarios: list[Scenario], verbose: bool) -> int:
     """Run scenarios and return a process exit code."""
-    failures = 0
+    outcomes: list[ScenarioOutcome] = []
     for scenario in scenarios:
         outcome = scenario.run()
-        status = "PASS" if outcome.passed else "FAIL"
-        print(f"{status} {outcome.name}")
-        if verbose or not outcome.passed:
-            for detail in outcome.details:
-                print(f"  - {detail}")
-        if not outcome.passed:
-            failures += 1
+        outcomes.append(outcome)
+        print_scenario_outcome(outcome, verbose)
+    failures = count_failures(outcomes)
     print(f"\n{len(scenarios) - failures}/{len(scenarios)} scenarios passed")
     return 1 if failures else 0
+
+
+def failed_check_messages(checks: list[tuple[bool, str]]) -> list[str]:
+    """Return messages for failed scenario checks."""
+    return [message for ok, message in checks if not ok]
+
+
+def append_recent_logs(details: list[str], dbus: Optional[FakeDbus]) -> None:
+    """Append recent simulated D-Bus logs when a scenario failed."""
+    if details and dbus is not None and dbus.logs:
+        details.append("recent logs: " + " | ".join(dbus.logs[-5:]))
+
+
+def select_scenarios(names: list[str], scenarios: list[Scenario]) -> list[Scenario]:
+    """Return all scenarios or a validated name subset."""
+    if not names or "all" in names:
+        return scenarios
+    known = {scenario.name: scenario for scenario in scenarios}
+    ensure_scenario_names_exist(names, known)
+    return [known[name] for name in names]
+
+
+def ensure_scenario_names_exist(names: list[str], known: dict[str, Scenario]) -> None:
+    """Raise when a requested scenario name is unknown."""
+    missing = [name for name in names if name not in known]
+    if missing:
+        raise SystemExit(f"Unknown scenario(s): {', '.join(missing)}")
+
+
+def print_scenario_outcome(outcome: ScenarioOutcome, verbose: bool) -> None:
+    """Print one scenario outcome and optional details."""
+    status = "PASS" if outcome.passed else "FAIL"
+    print(f"{status} {outcome.name}")
+    print_outcome_details(outcome, verbose)
+
+
+def print_outcome_details(outcome: ScenarioOutcome, verbose: bool) -> None:
+    """Print outcome details when requested or when the scenario failed."""
+    if verbose or not outcome.passed:
+        for detail in outcome.details:
+            print(f"  - {detail}")
+
+
+def count_failures(outcomes: list[ScenarioOutcome]) -> int:
+    """Return the number of failed scenario outcomes."""
+    return sum(1 for outcome in outcomes if not outcome.passed)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

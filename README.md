@@ -193,7 +193,7 @@ If no SD card is found, the controller still runs with RAM-only state.
 - DVCC enabled if charge-current limiting should be used
 - A battery service exposing `/Info/MaxChargeCurrent`
 
-The script expects these D-Bus services by default:
+The package expects these D-Bus services by default:
 
 ```python
 SERVICE_SETTINGS = 'com.victronenergy.settings'
@@ -201,7 +201,7 @@ SERVICE_SYSTEM = 'com.victronenergy.system'
 PREFERRED_BATTERY_SERVICE = 'com.victronenergy.battery.socketcan_vecan1'
 ```
 
-The preferred battery service can be adjusted in the script:
+The preferred battery service can be adjusted in `venus_ess_winter_soc_service/config.py`:
 
 ```python
 PREFERRED_BATTERY_SERVICE = 'com.victronenergy.battery.socketcan_vecan1'
@@ -222,8 +222,9 @@ chmod +x install.sh
 ./install.sh
 ```
 
-If `socSteuerung.py`, `service/run`, or `uninstall.sh` are missing from the
-same directory as `install.sh`, the installer downloads them from:
+If `socSteuerung.py`, the `venus_ess_winter_soc_service/` package,
+`service/run`, helper scripts, or `uninstall.sh` are missing from the same
+directory as `install.sh`, the installer downloads them from:
 
 ```text
 https://github.com/martinthebrain/venus-ess-winter-soc-service
@@ -350,11 +351,12 @@ Battery protection, inverter limits, charger limits, fuse ratings, grid-code com
 
 ## Recommended Testing
 
-The repository includes unit tests, 100% coverage enforcement for
-`socSteuerung.py`, Radon cyclomatic-complexity checks, and strict `mypy` /
-`pyright` type checks for the controller and helper scripts. GitHub Actions
-runs these checks on pushes and pull requests and uploads `coverage.xml` to
-Codecov.
+The repository includes unit tests, 100% line and branch coverage enforcement
+for `socSteuerung.py` and the `venus_ess_winter_soc_service/` package, Radon
+A-only cyclomatic-complexity checks, a production package file-size gate of
+500 lines per file, and strict `mypy` / `pyright` type checks for the
+controller and helper scripts. GitHub Actions runs these checks on pushes and
+pull requests and uploads `coverage.xml` to Codecov.
 
 Codecov expects a GitHub repository secret named:
 
@@ -369,11 +371,11 @@ python3 -m unittest discover -s tests
 python3 scripts/dbus_scenario_simulator.py
 python3 -m mypy
 python3 -m pyright
-python3 -m coverage run -m unittest
+python3 -m coverage run -m unittest discover -s tests
 python3 -m coverage report
 python3 -m coverage xml
-python3 -m radon cc socSteuerung.py -s -a
 python3 scripts/check_radon_a.py
+python3 scripts/check_package_file_lengths.py
 ```
 
 Offline D-Bus scenario simulation:

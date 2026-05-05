@@ -15,6 +15,21 @@ RC_LOCAL="/data/rc.local"
 RAW_BASE_URL="https://raw.githubusercontent.com/martinthebrain/venus-ess-winter-soc-service/main"
 RC_START="# ${SERVICE_NAME} start"
 RC_END="# ${SERVICE_NAME} end"
+PACKAGE_FILES="
+venus_ess_winter_soc_service/__init__.py
+venus_ess_winter_soc_service/base.py
+venus_ess_winter_soc_service/config.py
+venus_ess_winter_soc_service/controller.py
+venus_ess_winter_soc_service/dbus_iface.py
+venus_ess_winter_soc_service/dvcc.py
+venus_ess_winter_soc_service/persistence.py
+venus_ess_winter_soc_service/power.py
+venus_ess_winter_soc_service/runtime.py
+venus_ess_winter_soc_service/socpolicy.py
+venus_ess_winter_soc_service/storage.py
+venus_ess_winter_soc_service/tracking.py
+venus_ess_winter_soc_service/windows.py
+"
 
 script_dir() {
     case "$0" in
@@ -71,12 +86,18 @@ install_file() {
 
 install_files() {
     ensure_source_file "socSteuerung.py"
+    for rel_path in ${PACKAGE_FILES}; do
+        ensure_source_file "${rel_path}"
+    done
     ensure_source_file "service/run"
     ensure_source_file "scripts/dbus_scenario_simulator.py"
     ensure_source_file "scripts/live_dbus_testbed.py"
     ensure_source_file "uninstall.sh"
     mkdir -p "${INSTALL_DIR}"
     install_file "socSteuerung.py" 755
+    for rel_path in ${PACKAGE_FILES}; do
+        install_file "${rel_path}" 644
+    done
     install_file "service/run" 755
     install_file "scripts/dbus_scenario_simulator.py" 755   
     install_file "scripts/live_dbus_testbed.py" 755
