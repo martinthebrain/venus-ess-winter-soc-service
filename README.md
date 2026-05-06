@@ -43,10 +43,14 @@ On the Cerbo / Venus OS shell:
 ```bash
 mkdir -p /data/venus-ess-winter-soc-service
 cd /data/venus-ess-winter-soc-service
-wget -O install.sh https://raw.githubusercontent.com/martinthebrain/venus-ess-winter-soc-service/main/install.sh
+wget -O install.sh https://github.com/martinthebrain/venus-ess-winter-soc-service/releases/latest/download/install.sh
 chmod +x install.sh
 ./install.sh
 ```
+
+The installer and the service files are downloaded from the latest GitHub
+release by default. Set `ESS_RAW_BASE_URL` only when you intentionally want to
+install a specific tag, branch, fork, or local test source.
 
 Check that it is running:
 

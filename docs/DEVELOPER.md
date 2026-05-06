@@ -112,7 +112,19 @@ ESS_RC_LOCAL
 ESS_RAW_BASE_URL
 ESS_START_SERVICE
 ESS_ALLOW_NON_ROOT
+ESS_INSTALL_USE_LOCAL_FILES
 ```
+
+When `ESS_RAW_BASE_URL` is unset, managed files are fetched from the latest
+GitHub release tag unless the installer is running from a Git checkout. Set it
+explicitly in tests, release candidates, or forked installs when the source must
+be pinned to a branch or tag.
+
+When the installer runs from a Git checkout, existing local files are used. On a
+normal Venus OS install directory without `.git`, managed files are refreshed
+from the latest release when the installer is run again. Set
+`ESS_INSTALL_USE_LOCAL_FILES=1` only for explicit local-source testing outside a
+Git checkout.
 
 Normal Venus OS installs should not need these variables.
 
@@ -127,6 +139,16 @@ Before pushing a release candidate:
 5. Run `diagnose_install.sh`.
 6. Run the live D-Bus testbed.
 7. Reboot the test device and confirm service autostart.
+
+When creating a GitHub release, publish it from a tested tag. The
+`release-assets.yml` workflow uploads `install.sh` as a release asset after the
+release is published. The public install command uses:
+
+```text
+https://github.com/martinthebrain/venus-ess-winter-soc-service/releases/latest/download/install.sh
+```
+
+Wait for the release asset workflow to finish before announcing the release.
 
 For a public release, prefer a tagged GitHub release so users can install a
 known version instead of tracking `main`.

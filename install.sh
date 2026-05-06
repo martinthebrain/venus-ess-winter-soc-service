@@ -14,9 +14,13 @@ INSTALL_DIR="${ESS_INSTALL_DIR:-${DATA_ROOT}/etc/${SERVICE_NAME}}"
 SERVICE_DIR="${INSTALL_DIR}/service"
 SERVICE_LINK="${ESS_SERVICE_LINK:-${SERVICE_ROOT}/${SERVICE_NAME}}"
 RC_LOCAL="${ESS_RC_LOCAL:-${DATA_ROOT}/rc.local}"
-RAW_BASE_URL="${ESS_RAW_BASE_URL:-https://raw.githubusercontent.com/martinthebrain/venus-ess-winter-soc-service/main}"
+RAW_BASE_URL="${ESS_RAW_BASE_URL:-}"
 START_SERVICE="${ESS_START_SERVICE:-1}"
 ALLOW_NON_ROOT="${ESS_ALLOW_NON_ROOT:-0}"
+USE_LOCAL_FILES="${ESS_INSTALL_USE_LOCAL_FILES:-}"
+GITHUB_REPO="martinthebrain/venus-ess-winter-soc-service"
+GITHUB_API_LATEST_RELEASE="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}"
 RC_START="# ${SERVICE_NAME} start"
 RC_END="# ${SERVICE_NAME} end"
 PACKAGE_FILES="
@@ -75,19 +79,50 @@ require_root() {
     fi
 }
 
+latest_release_tag() {
+    have_cmd wget || die "wget is required to resolve the latest release from GitHub."
+    tag="$(
+        wget -qO- "${GITHUB_API_LATEST_RELEASE}" \
+            | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            | sed -n '1p'
+    )"
+    if [ -z "${tag}" ]; then
+        die "Could not resolve latest GitHub release. Create a release or set ESS_RAW_BASE_URL explicitly."
+    fi
+    echo "${tag}"
+}
+
+raw_base_url() {
+    if [ -n "${RAW_BASE_URL}" ]; then
+        echo "${RAW_BASE_URL}"
+        return
+    fi
+    tag="$(latest_release_tag)"
+    RAW_BASE_URL="${GITHUB_RAW_BASE}/${tag}"
+    echo "${RAW_BASE_URL}"
+}
+
 download_file() {
     rel_path="$1"
     dst_path="$2"
-    url="${RAW_BASE_URL}/${rel_path}"
-    have_cmd wget || die "wget is required to fetch missing files from ${RAW_BASE_URL}"
+    base_url="$(raw_base_url)"
+    url="${base_url}/${rel_path}"
+    have_cmd wget || die "wget is required to fetch missing files from ${base_url}"
     echo "Downloading ${url}"
     wget -O "${dst_path}" "${url}" || die "Could not download ${url}"
+}
+
+use_local_source_files() {
+    if [ "${USE_LOCAL_FILES}" = "1" ]; then
+        return 0
+    fi
+    [ -d "${SCRIPT_DIR}/.git" ]
 }
 
 ensure_source_file() {
     rel_path="$1"
     src_path="${SCRIPT_DIR}/${rel_path}"
-    if [ -f "${src_path}" ]; then
+    if use_local_source_files && [ -f "${src_path}" ]; then
         return
     fi
     mkdir -p "$(dirname "${src_path}")"

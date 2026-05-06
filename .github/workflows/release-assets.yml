@@ -1,0 +1,25 @@
+name: Release Assets
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  upload-install-script:
+    name: Upload install.sh
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+
+      - name: Upload installer asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x install.sh
+          gh release upload "${GITHUB_REF_NAME}" install.sh --clobber

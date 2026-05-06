@@ -54,10 +54,15 @@ from a single downloaded `install.sh`.
 ```bash
 mkdir -p /data/venus-ess-winter-soc-service
 cd /data/venus-ess-winter-soc-service
-wget -O install.sh https://raw.githubusercontent.com/martinthebrain/venus-ess-winter-soc-service/main/install.sh
+wget -O install.sh https://github.com/martinthebrain/venus-ess-winter-soc-service/releases/latest/download/install.sh
 chmod +x install.sh
 ./install.sh
 ```
+
+This command downloads `install.sh` from the latest GitHub release. The
+installer then installs or updates the service files from the latest release by
+default. Advanced users can set `ESS_RAW_BASE_URL` before running `install.sh`
+to install a specific release tag, branch, fork, or local test source.
 
 The installed service files live in:
 
@@ -80,8 +85,8 @@ The installer also adds a persistent block to:
 This recreates the `/service/...` symlink after reboot or firmware updates.
 
 The installer can be run again to update an existing installation. It overwrites
-installed files, keeps the `rc.local` block idempotent, and starts the service
-when `svc` is available.
+installed files from the latest release by default, keeps the `rc.local` block
+idempotent, and starts the service when `svc` is available.
 
 ## Uninstall
 
