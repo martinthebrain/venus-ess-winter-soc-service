@@ -62,10 +62,12 @@ main() {
     assert_exists "${install_dir}/scripts/live_dbus_core.py"
     assert_exists "${service_link}"
     assert_grep "# venus-ess-winter-soc-service start" "${RC_LOCAL}"
+    assert_grep "ln -sfn '${install_dir}/service' '${service_link}'" "${RC_LOCAL}"
 
     echo "corrupt" > "${install_dir}/socSteuerung.py"
     run_install
     assert_grep "Compatibility wrapper" "${install_dir}/socSteuerung.py"
+    assert_grep "ln -sfn '${install_dir}/service' '${service_link}'" "${RC_LOCAL}"
 
     run_uninstall
     assert_not_exists "${install_dir}"

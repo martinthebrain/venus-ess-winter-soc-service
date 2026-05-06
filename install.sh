@@ -147,12 +147,26 @@ rc_local_has_entry() {
     grep -F "${RC_START}" "${RC_LOCAL}" >/dev/null 2>&1
 }
 
+remove_rc_local_entry() {
+    if [ ! -f "${RC_LOCAL}" ]; then
+        return
+    fi
+    tmp_file="${RC_LOCAL}.tmp.$$"
+    awk -v start="${RC_START}" -v end="${RC_END}" '
+        $0 == start { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip != 1 { print }
+    ' "${RC_LOCAL}" > "${tmp_file}"
+    mv "${tmp_file}" "${RC_LOCAL}"
+    chmod 755 "${RC_LOCAL}"
+}
+
 append_rc_local_entry() {
     tmp_file="${RC_LOCAL}.tmp.$$"
     {
         echo "${RC_START}"
         echo "mkdir -p '${SERVICE_ROOT}'"
-        echo "[ -L '${SERVICE_LINK}' ] || ln -s '${SERVICE_DIR}' '${SERVICE_LINK}'"
+        echo "if [ ! -e '${SERVICE_LINK}' ] || [ -L '${SERVICE_LINK}' ]; then ln -sfn '${SERVICE_DIR}' '${SERVICE_LINK}'; fi"
         echo "${RC_END}"
     } > "${tmp_file}.block"
     awk -v block_file="${tmp_file}.block" '
@@ -183,8 +197,8 @@ append_rc_local_entry() {
 install_rc_local_entry() {
     ensure_rc_local_exists
     if rc_local_has_entry; then
-        echo "${RC_LOCAL} already contains ${SERVICE_NAME} entry"
-        return
+        echo "${RC_LOCAL} already contains ${SERVICE_NAME} entry; updating it"
+        remove_rc_local_entry
     fi
     append_rc_local_entry
 }
