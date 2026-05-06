@@ -39,6 +39,9 @@ jobs:
       - name: Run offline D-Bus scenario simulator
         run: python scripts/dbus_scenario_simulator.py
 
+      - name: Run installer self-test
+        run: scripts/install_selftest.sh
+
       - name: Run coverage
         run: python -m coverage run -m unittest discover -s tests
 
@@ -51,7 +54,7 @@ jobs:
       - name: Check cyclomatic complexity
         run: python scripts/check_radon_a.py
 
-      - name: Check package file lengths
+      - name: Check file lengths
         run: python scripts/check_package_file_lengths.py
 
       - name: Upload coverage reports to Codecov

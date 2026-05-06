@@ -8,11 +8,15 @@
 set -eu
 
 SERVICE_NAME="venus-ess-winter-soc-service"
-INSTALL_DIR="/data/etc/${SERVICE_NAME}"
+DATA_ROOT="${ESS_INSTALL_DATA_ROOT:-/data}"
+SERVICE_ROOT="${ESS_SERVICE_ROOT:-/service}"
+INSTALL_DIR="${ESS_INSTALL_DIR:-${DATA_ROOT}/etc/${SERVICE_NAME}}"
 SERVICE_DIR="${INSTALL_DIR}/service"
-SERVICE_LINK="/service/${SERVICE_NAME}"
-RC_LOCAL="/data/rc.local"
-RAW_BASE_URL="https://raw.githubusercontent.com/martinthebrain/venus-ess-winter-soc-service/main"
+SERVICE_LINK="${ESS_SERVICE_LINK:-${SERVICE_ROOT}/${SERVICE_NAME}}"
+RC_LOCAL="${ESS_RC_LOCAL:-${DATA_ROOT}/rc.local}"
+RAW_BASE_URL="${ESS_RAW_BASE_URL:-https://raw.githubusercontent.com/martinthebrain/venus-ess-winter-soc-service/main}"
+START_SERVICE="${ESS_START_SERVICE:-1}"
+ALLOW_NON_ROOT="${ESS_ALLOW_NON_ROOT:-0}"
 RC_START="# ${SERVICE_NAME} start"
 RC_END="# ${SERVICE_NAME} end"
 PACKAGE_FILES="
@@ -22,6 +26,7 @@ venus_ess_winter_soc_service/config.py
 venus_ess_winter_soc_service/controller.py
 venus_ess_winter_soc_service/dbus_iface.py
 venus_ess_winter_soc_service/dvcc.py
+venus_ess_winter_soc_service/paths.py
 venus_ess_winter_soc_service/persistence.py
 venus_ess_winter_soc_service/power.py
 venus_ess_winter_soc_service/runtime.py
@@ -29,6 +34,18 @@ venus_ess_winter_soc_service/socpolicy.py
 venus_ess_winter_soc_service/storage.py
 venus_ess_winter_soc_service/tracking.py
 venus_ess_winter_soc_service/windows.py
+"
+SCRIPT_FILES="
+scripts/dbus_scenario_simulator.py
+scripts/dbus_sim_core.py
+scripts/dbus_sim_harness.py
+scripts/dbus_sim_scenarios.py
+scripts/live_dbus_testbed.py
+scripts/live_dbus_core.py
+scripts/live_dbus_harness.py
+scripts/live_dbus_scenarios.py
+scripts/diagnose_install.sh
+scripts/install_selftest.sh
 "
 
 script_dir() {
@@ -50,6 +67,9 @@ have_cmd() {
 }
 
 require_root() {
+    if [ "${ALLOW_NON_ROOT}" = "1" ]; then
+        return
+    fi
     if have_cmd id && [ "$(id -u)" != "0" ]; then
         die "Please run this installer as root on Venus OS."
     fi
@@ -90,8 +110,9 @@ install_files() {
         ensure_source_file "${rel_path}"
     done
     ensure_source_file "service/run"
-    ensure_source_file "scripts/dbus_scenario_simulator.py"
-    ensure_source_file "scripts/live_dbus_testbed.py"
+    for rel_path in ${SCRIPT_FILES}; do
+        ensure_source_file "${rel_path}"
+    done
     ensure_source_file "uninstall.sh"
     mkdir -p "${INSTALL_DIR}"
     install_file "socSteuerung.py" 755
@@ -99,14 +120,15 @@ install_files() {
         install_file "${rel_path}" 644
     done
     install_file "service/run" 755
-    install_file "scripts/dbus_scenario_simulator.py" 755   
-    install_file "scripts/live_dbus_testbed.py" 755
+    for rel_path in ${SCRIPT_FILES}; do
+        install_file "${rel_path}" 755
+    done
     install_file "uninstall.sh" 755
     install_file "install.sh" 755
 }
 
 install_service_link() {
-    mkdir -p /service
+    mkdir -p "${SERVICE_ROOT}"
     if [ -e "${SERVICE_LINK}" ] && [ ! -L "${SERVICE_LINK}" ]; then
         die "${SERVICE_LINK} exists and is not a symlink."
     fi
@@ -129,7 +151,7 @@ append_rc_local_entry() {
     tmp_file="${RC_LOCAL}.tmp.$$"
     {
         echo "${RC_START}"
-        echo "mkdir -p /service"
+        echo "mkdir -p '${SERVICE_ROOT}'"
         echo "[ -L '${SERVICE_LINK}' ] || ln -s '${SERVICE_DIR}' '${SERVICE_LINK}'"
         echo "${RC_END}"
     } > "${tmp_file}.block"
@@ -168,6 +190,9 @@ install_rc_local_entry() {
 }
 
 start_service_if_possible() {
+    if [ "${START_SERVICE}" != "1" ]; then
+        return
+    fi
     if have_cmd svc; then
         svc -u "${SERVICE_LINK}" >/dev/null 2>&1 || true
     fi

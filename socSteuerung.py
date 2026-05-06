@@ -17,6 +17,7 @@ import dbus
 from venus_ess_winter_soc_service import *  # noqa: F403
 from venus_ess_winter_soc_service import WinterController
 from venus_ess_winter_soc_service.config import *  # noqa: F403
+from venus_ess_winter_soc_service.paths import *  # noqa: F403
 from venus_ess_winter_soc_service.storage import *  # noqa: F403
 
 __all__ = [

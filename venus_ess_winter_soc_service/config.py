@@ -15,8 +15,8 @@ from typing import Any, Callable, Optional, TypeAlias
 # Seasonal policy summary:
 # - Summer/default: use 10% MinSoC and preserve temporary manual overrides.
 # - Pre-winter low PV: stage a reserve raise toward 40%.
-# - Winter: stage a reserve raise toward 65%; balancing may temporarily target 100%.
-# - Winter low SoC plus low PV history: stage toward 40% first, then continue to 65%.
+# - Winter: stage a reserve raise toward 55%; balancing may temporarily target 100%.
+# - Winter low SoC plus low PV history: stage toward 40% first, then continue to 55%.
 # - Post-winter: hold 40% until PV recovery is confirmed, then return to 10%.
 # - Outside charge windows: hold the reached SoC; do not jump to a higher reserve target.
 # - During staged raises: capture the previous DVCC MaxChargeCurrent once and restore it
@@ -88,9 +88,19 @@ PV_THRESHOLD = 3000     # Watt average during the 09:00-17:00 PV sample window.
 TRANSITION_DAYS = 4     # Number of daily averages required for transition decisions.
 LOOP_INTERVAL_SECONDS = 60
 DEFAULT_SOC = 10.0
+TRANSITION_GUARD_SOC = 40.0
+WINTER_TARGET_SOC = 55.0
+BALANCING_TARGET_SOC = 100.0
+MIN_VALID_SOC = 0.0
+MAX_VALID_SOC = 100.0
 PV_FALLBACK_MIN_VALID_AGE_DAYS = 3
 MIN_SOC_EPSILON = 0.1
-SUMMER_MANUAL_MINSOC_HOLD_SECONDS = 24 * 3600
+BOOT_RECOVERY_TARGET_MATCH_EPSILON = 0.1
+FULL_DAY_HOURS = 24
+SECONDS_PER_HOUR = 3600
+SECONDS_PER_DAY = 86400
+SD_FLUSH_POLL_INTERVAL_SECONDS = 0.05
+SUMMER_MANUAL_MINSOC_HOLD_SECONDS = FULL_DAY_HOURS * SECONDS_PER_HOUR
 MIN_SOC_SCRIPT_WRITE_MATCH_SECONDS = 180
 SD_SAVE_INTERVAL_SECONDS = 21600
 SD_BACKOFF_MAX_SECONDS = 300

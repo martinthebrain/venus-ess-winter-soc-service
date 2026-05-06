@@ -6,21 +6,33 @@ from typing import Any, Optional, Sequence
 
 from .base import ControllerMixinBase
 from .config import *  # noqa: F403
+from .paths import (
+    AC_CONSUMPTION_ON_INPUT_POWER_PATH,
+    AC_CONSUMPTION_POWER_PATH,
+    AC_GRID_POWER_PATH,
+    AC_PV_ON_GRID_POWER_PATH,
+    AC_PV_ON_OUTPUT_POWER_PATH,
+    BATTERY_POWER_PATH,
+    BATTERY_VOLTAGE_PATH,
+    BMS_MAX_CHARGE_CURRENT_PATH,
+    DC_PV_POWER_PATH,
+    PHASES,
+)
 
 class PowerMixin(ControllerMixinBase):
     def get_total_pv_power(self) -> float:
         """Sum AC PV on grid/output sides plus DC PV power."""
         pv_ac = 0.0
-        for phase in ['L1', 'L2', 'L3']:
-            pv_ac += self.dbus.get_value(SERVICE_SYSTEM, f'/Ac/PvOnGrid/{phase}/Power', 0.0) or 0.0
-            pv_ac += self.dbus.get_value(SERVICE_SYSTEM, f'/Ac/PvOnOutput/{phase}/Power', 0.0) or 0.0
-             
-        pv_dc = self.dbus.get_value(SERVICE_SYSTEM, '/Dc/Pv/Power', 0.0) or 0.0
+        for phase in PHASES:
+            pv_ac += self.dbus.get_value(SERVICE_SYSTEM, AC_PV_ON_GRID_POWER_PATH.format(phase=phase), 0.0) or 0.0
+            pv_ac += self.dbus.get_value(SERVICE_SYSTEM, AC_PV_ON_OUTPUT_POWER_PATH.format(phase=phase), 0.0) or 0.0
+
+        pv_dc = self.dbus.get_value(SERVICE_SYSTEM, DC_PV_POWER_PATH, 0.0) or 0.0
         return pv_ac + pv_dc
 
     def get_grid_power_net(self) -> float:
         """Net grid power: import positive, export negative."""
-        total = self.sum_phase_values('/Ac/Grid/{phase}/Power')
+        total = self.sum_phase_values(AC_GRID_POWER_PATH)
         return total if total is not None else 0.0
 
     def get_battery_service(self) -> Optional[str]:
@@ -65,7 +77,7 @@ class PowerMixin(ControllerMixinBase):
         """Return True when a battery service exposes a usable BMS charge current."""
         if not isinstance(service, str) or not service:
             return False
-        val = self.dbus.get_value(service, '/Info/MaxChargeCurrent', None)
+        val = self.dbus.get_value(service, BMS_MAX_CHARGE_CURRENT_PATH, None)
         return val is not None and val > 0
 
     def select_preferred_battery_service(self, services: Sequence[str]) -> Optional[str]:
@@ -83,7 +95,7 @@ class PowerMixin(ControllerMixinBase):
         best: Optional[str] = None
         best_val = 0.0
         for svc in services:
-            val = self.dbus.get_value(svc, '/Info/MaxChargeCurrent', None)
+            val = self.dbus.get_value(svc, BMS_MAX_CHARGE_CURRENT_PATH, None)
             if val is not None and val > best_val:
                 best_val = val
                 best = svc
@@ -101,7 +113,7 @@ class PowerMixin(ControllerMixinBase):
         """Read and cache a live BMS maximum charge current when available."""
         if not service:
             return None
-        val = self.dbus.get_value(service, '/Info/MaxChargeCurrent', None)
+        val = self.dbus.get_value(service, BMS_MAX_CHARGE_CURRENT_PATH, None)
         if val is None or val <= 0:
             return None
         self.state["battery_max_current_last"] = val
@@ -116,11 +128,11 @@ class PowerMixin(ControllerMixinBase):
 
     def get_battery_power(self) -> Optional[float]:
         """Read the current DC battery power from the system service."""
-        return self.dbus.get_value(SERVICE_SYSTEM, '/Dc/Battery/Power', 0)
+        return self.dbus.get_value(SERVICE_SYSTEM, BATTERY_POWER_PATH, 0)
 
     def get_battery_voltage(self) -> Optional[float]:
         """Read the current DC battery voltage used for charge-current calculations."""
-        return self.dbus.get_value(SERVICE_SYSTEM, '/Dc/Battery/Voltage', None)
+        return self.dbus.get_value(SERVICE_SYSTEM, BATTERY_VOLTAGE_PATH, None)
 
     def get_house_load_power(
         self,
@@ -128,11 +140,11 @@ class PowerMixin(ControllerMixinBase):
         batt_power: Optional[float] = None,
     ) -> float:
         """Compute house load from consumption paths or fallback."""
-        total = self.sum_phase_values('/Ac/ConsumptionOnInput/{phase}/Power')
+        total = self.sum_phase_values(AC_CONSUMPTION_ON_INPUT_POWER_PATH)
         if total is not None:
             return total
 
-        total = self.sum_phase_values('/Ac/Consumption/{phase}/Power')
+        total = self.sum_phase_values(AC_CONSUMPTION_POWER_PATH)
         if total is not None:
             return total
 
@@ -142,7 +154,7 @@ class PowerMixin(ControllerMixinBase):
         """Sum L1-L3 D-Bus values, returning None when no phase exists."""
         total = 0.0
         found = False
-        for phase in ['L1', 'L2', 'L3']:
+        for phase in PHASES:
             val = self.dbus.get_value(SERVICE_SYSTEM, path_template.format(phase=phase), None)
             if val is not None:
                 total += val

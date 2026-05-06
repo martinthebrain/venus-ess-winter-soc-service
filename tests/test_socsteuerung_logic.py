@@ -1,67 +1,7 @@
-import importlib.util
-import sys
-import types
 import unittest
 from datetime import datetime
-from pathlib import Path
 
-
-def _install_fake_dbus():
-    if "dbus" in sys.modules:
-        return
-
-    fake = types.ModuleType("dbus")
-    fake.Boolean = bool
-    fake.Int16 = int
-    fake.UInt16 = int
-    fake.Int32 = int
-    fake.UInt32 = int
-    fake.Int64 = int
-    fake.UInt64 = int
-    fake.Double = float
-    fake.Byte = int
-
-    class _SystemBus:
-        def get_object(self, *_args, **_kwargs):
-            raise RuntimeError("Not used in unit tests")
-
-        def list_names(self, *_args, **_kwargs):
-            return []
-
-    fake.SystemBus = _SystemBus
-    sys.modules["dbus"] = fake
-
-
-def _load_module():
-    _install_fake_dbus()
-    module_name = "socsteuerung_under_test"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-
-    script = Path(__file__).resolve().parents[1] / "socSteuerung.py"
-    spec = importlib.util.spec_from_file_location(module_name, script)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-M = _load_module()
-
-
-def charge_context(**overrides):
-    context = {
-        "time_ok": True,
-        "effective_active": False,
-        "stage_charge_target": True,
-        "grid_import": 100.0,
-        "house_load": 2500.0,
-        "battery_max_current": 100.0,
-        "battery_voltage": 52.0,
-    }
-    context.update(overrides)
-    return context
+from tests.helpers import M, charge_context
 
 
 class _DbusStub:
@@ -150,8 +90,8 @@ class WinterControllerLogicTests(unittest.TestCase):
 
         ctx = c._build_charge_context(
             current_soc=15.0,
-            target_soc=65.0,
-            current_setting=65.0,
+            target_soc=55.0,
+            current_setting=55.0,
             now=datetime(2026, 1, 1, 1, 0, 0),
             now_ts=1_000.0,
         )
@@ -177,7 +117,7 @@ class WinterControllerLogicTests(unittest.TestCase):
         c.save_state_to_ram = lambda *args, **kwargs: calls.__setitem__("save", calls["save"] + 1)
 
         c._handle_charge_needed(
-            current_limit_path="/Settings/CGwacs/BatteryLife/MinimumSocLimit",
+            current_limit_path=M.MIN_SOC_PATH,
             target_soc=40.0,
             current_soc=20.0,
             current_setting=25.0,
@@ -204,7 +144,7 @@ class WinterControllerLogicTests(unittest.TestCase):
         c.save_state_to_ram = lambda *args, **kwargs: calls.__setitem__("save", calls["save"] + 1)
 
         c._handle_charge_not_needed(
-            current_limit_path="/Settings/CGwacs/BatteryLife/MinimumSocLimit",
+            current_limit_path=M.MIN_SOC_PATH,
             target_soc=10.0,
             current_setting=30.0,
             battery_max_current=250.0,

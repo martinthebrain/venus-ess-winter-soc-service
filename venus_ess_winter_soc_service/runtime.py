@@ -7,12 +7,13 @@ from typing import Optional, cast
 from .base import ControllerMixinBase
 from .config import *  # noqa: F403
 from .config import State
+from .paths import BATTERY_SOC_PATH
 
 class RuntimeMixin(ControllerMixinBase):
     def read_current_soc(self) -> Optional[float]:
         """Read and validate the current battery SoC measurement."""
-        current_soc = self.dbus.get_raw_value(SERVICE_SYSTEM, '/Dc/Battery/Soc', None)
-        if current_soc is None or current_soc < 0 or current_soc > 100:
+        current_soc = self.dbus.get_raw_value(SERVICE_SYSTEM, BATTERY_SOC_PATH, None)
+        if current_soc is None or current_soc < MIN_VALID_SOC or current_soc > MAX_VALID_SOC:
             now = time.time()
             last_log = float(self.state.get("last_soc_invalid_log_ts", 0))
             if (now - last_log) >= SOC_INVALID_LOG_INTERVAL_SECONDS:
@@ -83,3 +84,10 @@ class RuntimeMixin(ControllerMixinBase):
         """Main loop: update PV, compute targets, apply logic, and sleep."""
         sd_mode = "seasonal SD available" if self.sd_state_file else "RAM-only"
         self.dbus.log(f"ESS winter controller started ({sd_mode})")
+        while True:
+            try:
+                self.run_once()
+                time.sleep(LOOP_INTERVAL_SECONDS)
+            except Exception as e:
+                self.dbus.log(f"Main loop error: {e}")
+                time.sleep(LOOP_INTERVAL_SECONDS)

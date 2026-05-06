@@ -381,7 +381,7 @@ class PersistenceMixin(ControllerMixinBase):
                 inflight = self.sd_write_inflight
             if not pending and not inflight:
                 return True
-            time.sleep(0.05)
+            time.sleep(SD_FLUSH_POLL_INTERVAL_SECONDS)
         return False
 
     def register_signal_handlers(self) -> None:

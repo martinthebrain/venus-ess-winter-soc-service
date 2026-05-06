@@ -66,13 +66,13 @@ class TrackingMixin(ControllerMixinBase):
         if not self.state["balancing_active"]:
             return False
 
-        if (now_ts - float(self.state["balancing_start_ts"])) > (BALANCING_MAX_HOURS * 3600):
+        if (now_ts - float(self.state["balancing_start_ts"])) > (BALANCING_MAX_HOURS * SECONDS_PER_HOUR):
             self.finish_balancing_attempt(now_ts, success=False)
             self.dbus.log("Balancing aborted (timeout without sustained near-full SoC)")
             return True
 
         changed = self.update_balancing_full_seconds(current_soc, delta)
-        if self.state["balance_full_seconds"] >= (BALANCING_DURATION_HOURS * 3600):
+        if self.state["balance_full_seconds"] >= (BALANCING_DURATION_HOURS * SECONDS_PER_HOUR):
             self.finish_balancing_attempt(now_ts, success=True)
             self.dbus.log("Balancing completed successfully")
             return True
@@ -122,13 +122,13 @@ class TrackingMixin(ControllerMixinBase):
     def balancing_due_interval_seconds(self, due_source_ts: float) -> int:
         """Return the required delay before a balancing cycle may start."""
         if due_source_ts == self.state["boot_ts"]:
-            return BALANCING_BOOT_GRACE_HOURS * 3600
-        return BALANCING_INTERVAL_DAYS * 86400
+            return BALANCING_BOOT_GRACE_HOURS * SECONDS_PER_HOUR
+        return BALANCING_INTERVAL_DAYS * SECONDS_PER_DAY
 
     def is_balance_retry_cooling_down(self, now_ts: float) -> bool:
         """Return True when a recent failed/started attempt is still cooling down."""
         elapsed = now_ts - float(self.state["last_balance_attempt_ts"])
-        return elapsed < (BALANCING_RETRY_COOLDOWN_HOURS * 3600)
+        return elapsed < (BALANCING_RETRY_COOLDOWN_HOURS * SECONDS_PER_HOUR)
 
     def update_pv_history(self) -> None:
         """Integrate PV power during the daily sample window and roll history."""
@@ -176,7 +176,7 @@ class TrackingMixin(ControllerMixinBase):
         last_valid_ts = float(self.state.get("last_pv_integral_ts", 0.0))
         if last_valid_ts <= 0:
             last_valid_ts = float(self.state.get("boot_ts", now_ts))
-        return (now_ts - last_valid_ts) >= (PV_FALLBACK_MIN_VALID_AGE_DAYS * 86400)
+        return (now_ts - last_valid_ts) >= (PV_FALLBACK_MIN_VALID_AGE_DAYS * SECONDS_PER_DAY)
 
     def add_pv_history_value(self, avg: float) -> None:
         """Append one daily PV average and keep only the transition decision window."""
@@ -237,14 +237,14 @@ class TrackingMixin(ControllerMixinBase):
     def determine_pre_winter_target(self) -> TargetMode:
         """Return the pre-winter target based on recent low-PV history."""
         if self.has_transition_history_below_threshold():
-            return 40.0, "Pre-Winter Low PV"
+            return TRANSITION_GUARD_SOC, "Pre-Winter Low PV"
         return DEFAULT_SOC, "Default"
 
     def determine_post_winter_target(self) -> TargetMode:
         """Return the post-winter guard target until PV has clearly recovered."""
         if self.has_transition_history_above_threshold():
             return DEFAULT_SOC, "Post-Winter PV Recovered"
-        return 40.0, "Post-Winter Guard"
+        return TRANSITION_GUARD_SOC, "Post-Winter Guard"
 
     def determine_winter_target(
         self,
@@ -255,16 +255,16 @@ class TrackingMixin(ControllerMixinBase):
         if self.should_start_balancing(now_ts):
             self.start_balancing(now_ts)
         if self.state["balancing_active"]:
-            return 100.0, "Winter Balancing"
+            return BALANCING_TARGET_SOC, "Winter Balancing"
         if self.should_use_winter_40_stage(current_soc):
-            return 40.0, "Winter Low PV Stage"
-        return 65.0, "Winter"
+            return TRANSITION_GUARD_SOC, "Winter Low PV Stage"
+        return WINTER_TARGET_SOC, "Winter"
 
     def should_use_winter_40_stage(self, current_soc: Optional[float]) -> bool:
         """Return True when low PV history should first build a 40% winter reserve."""
         if current_soc is None:
             return False
-        if current_soc >= (40.0 - SOC_HYSTERESIS):
+        if current_soc >= (TRANSITION_GUARD_SOC - SOC_HYSTERESIS):
             return False
         return self.has_transition_history_below_threshold()
 

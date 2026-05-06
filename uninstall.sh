@@ -4,9 +4,11 @@
 set -eu
 
 SERVICE_NAME="venus-ess-winter-soc-service"
-INSTALL_DIR="/data/etc/${SERVICE_NAME}"
-SERVICE_LINK="/service/${SERVICE_NAME}"
-RC_LOCAL="/data/rc.local"
+DATA_ROOT="${ESS_INSTALL_DATA_ROOT:-/data}"
+SERVICE_ROOT="${ESS_SERVICE_ROOT:-/service}"
+INSTALL_DIR="${ESS_INSTALL_DIR:-${DATA_ROOT}/etc/${SERVICE_NAME}}"
+SERVICE_LINK="${ESS_SERVICE_LINK:-${SERVICE_ROOT}/${SERVICE_NAME}}"
+RC_LOCAL="${ESS_RC_LOCAL:-${DATA_ROOT}/rc.local}"
 RC_START="# ${SERVICE_NAME} start"
 RC_END="# ${SERVICE_NAME} end"
 

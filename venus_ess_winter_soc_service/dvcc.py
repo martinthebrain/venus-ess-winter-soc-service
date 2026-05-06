@@ -8,6 +8,7 @@ import dbus
 
 from .base import ControllerMixinBase
 from .config import *  # noqa: F403
+from .paths import MAX_CHARGE_CURRENT_PATH
 
 class DvccMixin(ControllerMixinBase):
     def get_max_charge_current_raw(self) -> Optional[float]:
@@ -202,7 +203,7 @@ class DvccMixin(ControllerMixinBase):
         if desired_a is None:
             return False
         desired_a = float(desired_a)
-        max_curr_path = '/Settings/SystemSetup/MaxChargeCurrent'
+        max_curr_path = MAX_CHARGE_CURRENT_PATH
         current_raw = self.read_current_max_charge_current(max_curr_path)
         if current_raw is None:
             return False
@@ -270,7 +271,7 @@ class DvccMixin(ControllerMixinBase):
         now_ts = time.time()
         if not self.status_log_due(now_ts):
             return
-        max_curr_path = '/Settings/SystemSetup/MaxChargeCurrent'
+        max_curr_path = MAX_CHARGE_CURRENT_PATH
         current_limit = self.dbus.get_raw_value(SERVICE_SETTINGS, max_curr_path, None)
         self.dbus.log(self.build_status_message(house_load, battery_max_current, current_limit, now_ts))
         self.state["last_status_log_ts"] = now_ts

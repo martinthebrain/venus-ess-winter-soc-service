@@ -7,6 +7,7 @@ from typing import Optional, cast
 
 from .base import ControllerMixinBase
 from .config import *  # noqa: F403
+from .paths import MIN_SOC_PATH
 
 class SocPolicyMixin(ControllerMixinBase):
     def is_charge_control_active(self) -> bool:
@@ -70,7 +71,7 @@ class SocPolicyMixin(ControllerMixinBase):
         last_override_log = float(self.state.get("last_manual_override_log_ts", 0))
         if (now_ts - last_override_log) < STATUS_LOG_INTERVAL_SECONDS:
             return False
-        remaining_h = max((float(self.state["manual_override_until_ts"]) - now_ts) / 3600.0, 0.0)
+        remaining_h = max((float(self.state["manual_override_until_ts"]) - now_ts) / float(SECONDS_PER_HOUR), 0.0)
         self.dbus.log(f"Summer MinSoC override active ({remaining_h:.1f}h remaining)")
         self.state["last_manual_override_log_ts"] = now_ts
         return True
@@ -96,7 +97,7 @@ class SocPolicyMixin(ControllerMixinBase):
         deficit_start = float(self.state.get("charge_deficit_start_ts", 0))
         if deficit_start <= 0:
             return CHARGE_WINDOW_BASE_HOURS
-        elapsed_nights = int(max(0.0, now_ts - deficit_start) // 86400)
+        elapsed_nights = int(max(0.0, now_ts - deficit_start) // SECONDS_PER_DAY)
         escalation_steps = elapsed_nights // CHARGE_WINDOW_ESCALATION_NIGHTS
         multiplier = min(2 ** escalation_steps, CHARGE_WINDOW_MAX_MULTIPLIER)
         return int(CHARGE_WINDOW_BASE_HOURS * multiplier)
@@ -104,12 +105,12 @@ class SocPolicyMixin(ControllerMixinBase):
     def is_charge_window_active(self, now: datetime, now_ts: float) -> bool:
         """Return True when the current hour is inside the adaptive charge window."""
         duration_h = self.charge_window_hours(now_ts)
-        if duration_h >= 24:
+        if duration_h >= FULL_DAY_HOURS:
             return True
         hours_since_start = (
-            (now.hour - CHARGE_WINDOW_START_HOUR) % 24
+            (now.hour - CHARGE_WINDOW_START_HOUR) % FULL_DAY_HOURS
             + (now.minute / 60.0)
-            + (now.second / 3600.0)
+            + (now.second / float(SECONDS_PER_HOUR))
         )
         return hours_since_start < duration_h
 
@@ -184,7 +185,7 @@ class SocPolicyMixin(ControllerMixinBase):
             return False
         if not self.is_boot_recovery_window(now_ts):
             return False
-        return needs_charge and current_setting >= (target_soc - 0.1)
+        return needs_charge and current_setting >= (target_soc - BOOT_RECOVERY_TARGET_MATCH_EPSILON)
 
     def _handle_charge_needed(
         self,
@@ -325,7 +326,7 @@ class SocPolicyMixin(ControllerMixinBase):
         pause SoC at the already reached level, so ESS does not discharge stored
         reserve energy while avoiding an immediate jump to the full target.
         """
-        current_limit_path = '/Settings/CGwacs/BatteryLife/MinimumSocLimit'
+        current_limit_path = MIN_SOC_PATH
         current_setting = self.read_valid_min_soc_setting(current_limit_path)
         if current_setting is None:
             return
@@ -343,7 +344,7 @@ class SocPolicyMixin(ControllerMixinBase):
     def read_valid_min_soc_setting(self, current_limit_path: str) -> Optional[float]:
         """Read and validate the Victron ESS MinimumSocLimit setting."""
         current_setting = self.dbus.get_raw_value(SERVICE_SETTINGS, current_limit_path, None)
-        if current_setting is not None and 0 <= current_setting <= 100:
+        if current_setting is not None and MIN_VALID_SOC <= current_setting <= MAX_VALID_SOC:
             return float(current_setting)
         self.log_invalid_min_soc_if_due()
         return None
