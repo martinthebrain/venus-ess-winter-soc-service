@@ -1,6 +1,4 @@
-__pycache__/
-*.py[cod]
-.coverage
-coverage.xml
-test-results/
-.pytest_cache/
+/target/
+/src.zip
+*.swp
+*.tmp

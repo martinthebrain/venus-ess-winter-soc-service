@@ -9,17 +9,27 @@ permissions:
   contents: write
 
 jobs:
-  upload-install-script:
-    name: Upload install.sh
+  upload-release-bundle:
+    name: Upload Venus OS ARMv7 bundle
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
 
-      - name: Upload installer asset
+      - name: Build release bundle
+        run: |
+          chmod +x install.sh uninstall.sh deploy/venus/install.sh service/run service-shadow/run
+          tar -czf venus-ess-winter-soc-service-armv7.tar.gz \
+            LICENSE README.md CONTRACTS.md config.env.example install.sh uninstall.sh \
+            bin deploy service service-shadow
+
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          chmod +x install.sh
-          gh release upload "${GITHUB_REF_NAME}" install.sh --clobber
+          gh release upload "${GITHUB_REF_NAME}" \
+            venus-ess-winter-soc-service-armv7.tar.gz \
+            install.sh \
+            bin/venus-ess-winter-soc-service \
+            --clobber

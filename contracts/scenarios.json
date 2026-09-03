@@ -1,0 +1,32 @@
+{
+  "seasonal_targets": [
+    {"name":"summer_default","date":"2026-07-01T12:00:00","now_ts":1000.0,"history":[],"target":10.0,"mode":"Default"},
+    {"name":"pre_winter_low_pv","date":"2026-11-10T12:00:00","now_ts":1000.0,"history":[1000.0,2000.0,2500.0,2800.0],"target":40.0,"mode":"Pre-Winter Low PV"},
+    {"name":"pre_winter_boundary_not_low","date":"2026-11-10T12:00:00","now_ts":1000.0,"history":[1000.0,2000.0,2500.0,3000.0],"target":10.0,"mode":"Default"},
+    {"name":"post_winter_guard","date":"2026-02-10T12:00:00","now_ts":1000.0,"history":[1000.0,2000.0,2500.0,2800.0],"target":40.0,"mode":"Post-Winter Guard"},
+    {"name":"post_winter_recovered","date":"2026-02-10T12:00:00","now_ts":1000.0,"history":[4000.0,4001.0,4002.0,4003.0],"target":10.0,"mode":"Post-Winter PV Recovered"},
+    {"name":"winter_default","date":"2026-01-01T12:00:00","now_ts":1000.0,"history":[],"target":45.0,"mode":"Winter"},
+    {"name":"winter_ignores_low_pv_history","date":"2026-01-01T12:00:00","now_ts":1000.0,"history":[1000.0,2000.0,2500.0,2800.0],"target":45.0,"mode":"Winter"}
+  ],
+  "charge_windows": [
+    {"name":"base_window_start","date":"2026-01-01T23:00:00","now_ts":1000.0,"deficit_start_ts":1000.0,"hours":4,"active":true},
+    {"name":"base_window_end_exclusive","date":"2026-01-02T03:00:00","now_ts":1000.0,"deficit_start_ts":1000.0,"hours":4,"active":false},
+    {"name":"two_nights_escalates","date":"2026-01-02T06:00:00","now_ts":173800.0,"deficit_start_ts":1000.0,"hours":8,"active":true},
+    {"name":"four_nights_escalates","date":"2026-01-02T12:00:00","now_ts":346600.0,"deficit_start_ts":1000.0,"hours":16,"active":true},
+    {"name":"six_nights_stays_capped","date":"2026-01-02T17:00:00","now_ts":519400.0,"deficit_start_ts":1000.0,"hours":16,"active":false}
+  ],
+  "charge_currents": [
+    {"name":"missing_bms","house_load_w":1000.0,"battery_max_current_a":null,"vebus_max_charge_current_a":200.0,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":null},
+    {"name":"missing_vebus","house_load_w":1000.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":null,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":null},
+    {"name":"grid_limited","house_load_w":1500.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":200.0,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":41.0},
+    {"name":"multiplus_fraction_is_lower","house_load_w":1500.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":35.0,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":14.0},
+    {"name":"bms_fraction_is_lower","house_load_w":1500.0,"battery_max_current_a":50.0,"vebus_max_charge_current_a":210.0,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":20.0},
+    {"name":"ac_and_dc_pv_are_added","house_load_w":1500.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":35.0,"battery_voltage_v":52.0,"ac_pv_power_w":520.0,"dc_pv_power_w":520.0,"normal_current_a":null,"expected":33.0},
+    {"name":"pv_addition_stays_within_hardware","house_load_w":1500.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":35.0,"battery_voltage_v":52.0,"ac_pv_power_w":5200.0,"dc_pv_power_w":5200.0,"normal_current_a":null,"expected":35.0},
+    {"name":"minimum_progress","house_load_w":3950.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":200.0,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":10.0},
+    {"name":"bms_fraction_below_minimum","house_load_w":3950.0,"battery_max_current_a":5.0,"vebus_max_charge_current_a":200.0,"battery_voltage_v":52.0,"ac_pv_power_w":0.0,"dc_pv_power_w":0.0,"normal_current_a":null,"expected":2.0},
+    {"name":"missing_voltage_safe_limit","house_load_w":1000.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":200.0,"battery_voltage_v":null,"ac_pv_power_w":1000.0,"dc_pv_power_w":1000.0,"normal_current_a":null,"expected":50.0},
+    {"name":"captured_normal_clamp","house_load_w":1000.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":200.0,"battery_voltage_v":52.0,"ac_pv_power_w":1000.0,"dc_pv_power_w":1000.0,"normal_current_a":30.0,"expected":30.0},
+    {"name":"stricter_gui_clamp","house_load_w":1000.0,"battery_max_current_a":200.0,"vebus_max_charge_current_a":200.0,"battery_voltage_v":52.0,"ac_pv_power_w":1000.0,"dc_pv_power_w":1000.0,"normal_current_a":10.0,"expected":10.0}
+  ]
+}
