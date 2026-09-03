@@ -842,8 +842,10 @@ mod tests {
         fs::create_dir(&medium).unwrap_or_else(|_| std::process::abort());
         let identity =
             RemovableMediumIdentity::capture(&medium).unwrap_or_else(|_| std::process::abort());
+        let replacement = root.path().join("replacement-medium");
+        fs::create_dir(&replacement).unwrap_or_else(|_| std::process::abort());
         fs::remove_dir(&medium).unwrap_or_else(|_| std::process::abort());
-        fs::create_dir(&medium).unwrap_or_else(|_| std::process::abort());
+        fs::rename(&replacement, &medium).unwrap_or_else(|_| std::process::abort());
         let target = medium.join("socSteuerung/ess_winter_logic.json");
 
         let error = atomic_write_removable(&identity, &target, b"state", true)
