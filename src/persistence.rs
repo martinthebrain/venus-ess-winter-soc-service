@@ -1840,13 +1840,19 @@ mod tests {
         );
         assert_eq!(state.pv_history, vec![1_500.0]);
 
-        fs::remove_dir_all(&sd_root).unwrap_or_else(|_| std::process::abort());
-        fs::create_dir_all(&sd_directory).unwrap_or_else(|_| std::process::abort());
+        // Keep both directory objects alive at once so the filesystem cannot
+        // immediately reuse the old inode for the simulated replacement.
+        let replacement_root = root.path().join("replacement-sd");
+        let replacement_directory = replacement_root.join("socSteuerung");
+        let replacement_state_file = replacement_directory.join("ess_winter_logic.json");
+        fs::create_dir_all(&replacement_directory).unwrap_or_else(|_| std::process::abort());
         fs::write(
-            &sd_state_file,
+            &replacement_state_file,
             state_document(&config, json!({"ts": 104.0, "pv_history": [2_500.0]})),
         )
         .unwrap_or_else(|_| std::process::abort());
+        fs::remove_dir_all(&sd_root).unwrap_or_else(|_| std::process::abort());
+        fs::rename(&replacement_root, &sd_root).unwrap_or_else(|_| std::process::abort());
 
         assert!(
             repository
@@ -2191,12 +2197,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap_or_else(|_| std::process::abort());
         let medium = root.path().join("medium");
         fs::create_dir(&medium).unwrap_or_else(|_| std::process::abort());
+        let replacement = root.path().join("replacement-medium");
+        fs::create_dir(&replacement).unwrap_or_else(|_| std::process::abort());
         let mut config = repository_config(root.path());
         config.sd_path = Some(medium.clone());
         let old_identity = crate::storage::locate_sd(&config)
             .map_or_else(|| std::process::abort(), |location| location.identity);
         fs::remove_dir(&medium).unwrap_or_else(|_| std::process::abort());
-        fs::create_dir(&medium).unwrap_or_else(|_| std::process::abort());
+        fs::rename(&replacement, &medium).unwrap_or_else(|_| std::process::abort());
         let new_identity = crate::storage::locate_sd(&config)
             .map_or_else(|| std::process::abort(), |location| location.identity);
         assert_ne!(old_identity, new_identity);
