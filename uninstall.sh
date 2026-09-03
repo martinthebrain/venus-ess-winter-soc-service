@@ -1,59 +1,10 @@
 #!/bin/sh
-# Remove the Venus ESS winter SoC controller service from Venus OS.
+# Restore owned settings and remove the native Winter SoC service integration.
 
 set -eu
 
-SERVICE_NAME="venus-ess-winter-soc-service"
-DATA_ROOT="${ESS_INSTALL_DATA_ROOT:-/data}"
-SERVICE_ROOT="${ESS_SERVICE_ROOT:-/service}"
-INSTALL_DIR="${ESS_INSTALL_DIR:-${DATA_ROOT}/etc/${SERVICE_NAME}}"
-SERVICE_LINK="${ESS_SERVICE_LINK:-${SERVICE_ROOT}/${SERVICE_NAME}}"
-RC_LOCAL="${ESS_RC_LOCAL:-${DATA_ROOT}/rc.local}"
-RC_START="# ${SERVICE_NAME} start"
-RC_END="# ${SERVICE_NAME} end"
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+export ESS_WINTER_RUST_ROOT=${ESS_WINTER_RUST_ROOT:-$SCRIPT_DIR}
+export ESS_WINTER_INSTALL_MODE=uninstall
 
-have_cmd() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-stop_service_if_possible() {
-    if have_cmd svc && [ -e "${SERVICE_LINK}" ]; then
-        svc -d "${SERVICE_LINK}" >/dev/null 2>&1 || true
-    fi
-}
-
-remove_service_link() {
-    if [ -L "${SERVICE_LINK}" ]; then
-        rm -f "${SERVICE_LINK}"
-    fi
-}
-
-remove_rc_local_entry() {
-    if [ ! -f "${RC_LOCAL}" ]; then
-        return
-    fi
-    tmp_file="${RC_LOCAL}.tmp.$$"
-    awk -v start="${RC_START}" -v end="${RC_END}" '
-        $0 == start { skip = 1; next }
-        $0 == end { skip = 0; next }
-        skip != 1 { print }
-    ' "${RC_LOCAL}" > "${tmp_file}"
-    mv "${tmp_file}" "${RC_LOCAL}"
-    chmod 755 "${RC_LOCAL}"
-}
-
-remove_installed_files() {
-    if [ -d "${INSTALL_DIR}" ]; then
-        rm -rf "${INSTALL_DIR}"
-    fi
-}
-
-main() {
-    stop_service_if_possible
-    remove_service_link
-    remove_rc_local_entry
-    remove_installed_files
-    echo "${SERVICE_NAME} uninstalled."
-}
-
-main "$@"
+exec "$SCRIPT_DIR/deploy/venus/install.sh"

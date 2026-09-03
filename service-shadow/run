@@ -8,5 +8,9 @@ if [ -r "$CONFIG" ]; then
     . "$CONFIG"
     set +a
 fi
+export ESS_SHADOW_MODE=1
+RUNTIME_DIR=${ESS_RUNTIME_DIR:-/dev/shm/venus-ess-winter-soc-service}
+export ESS_RUNTIME_DIR=$RUNTIME_DIR
+export ESS_DECISION_FILE=${ESS_DECISION_FILE:-$RUNTIME_DIR/decision-shadow.json}
 exec 2>&1
 exec "$ROOT/bin/venus-ess-winter-soc-service"
