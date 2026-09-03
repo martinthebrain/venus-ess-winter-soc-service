@@ -116,8 +116,27 @@ Build the Venus OS ARMv7 binary with the pinned toolchain container:
 The production service entry point is `service/run`. The independent shadow
 entry point is `service-shadow/run`; both expect the deployment root at
 `/data/venus-ess-winter-soc-service-rust` unless `ESS_WINTER_RUST_ROOT` is set.
-From an extracted checkout on Venus OS, `./install.sh` activates the native
-service and makes the runit link persistent across reboots. Set
+
+For a production installation, download and inspect the installer from the
+latest published release, then run it as root:
+
+```sh
+wget -O /tmp/install-winter-soc.sh \
+  https://github.com/martinthebrain/venus-ess-winter-soc-service/releases/latest/download/install.sh
+chmod 700 /tmp/install-winter-soc.sh
+/tmp/install-winter-soc.sh
+```
+
+The published installer contains its exact release tag. It downloads only the
+bundle and `SHA256SUMS` belonging to that tag, verifies the bundle, stages it
+on the target filesystem, preserves `config.env` and the durable GUI restore
+record, and activates the complete deployment. It never obtains managed files
+from `main`. `ESS_RELEASE_BASE_URL` may be set explicitly for a trusted release
+mirror; it does not change the embedded release tag.
+
+From an extracted release bundle or source checkout on Venus OS, `./install.sh`
+activates that local tree and makes the runit link persistent across reboots.
+Set
 `ESS_WINTER_INSTALL_MODE=shadow` to run the same build without changing the
 active controller. `./uninstall.sh` performs the explicit owned-setting cleanup
 before removing the service integration.

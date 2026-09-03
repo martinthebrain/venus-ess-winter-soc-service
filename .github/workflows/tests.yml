@@ -27,6 +27,13 @@ jobs:
       - name: Run formatting, tests, and lints
         run: scripts/check.sh
 
+      - name: Verify immutable release assets
+        run: |
+          scripts/build-release-assets.sh v0.0.0-ci /tmp/winter-soc-release-assets
+          sh -n /tmp/winter-soc-release-assets/install.sh
+          tar -tzf /tmp/winter-soc-release-assets/venus-ess-winter-soc-service-armv7.tar.gz \
+            | grep -Fx deploy/venus/install.sh
+
       - name: Rebuild the deployed ARMv7 binary
         run: |
           cp bin/venus-ess-winter-soc-service /tmp/venus-ess-winter-soc-service.before
