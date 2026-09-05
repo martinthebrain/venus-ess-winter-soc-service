@@ -25,7 +25,12 @@ jobs:
           rustup default 1.88.0
 
       - name: Run formatting, tests, and lints
-        run: scripts/check.sh
+        # Boundary tests use a private daemon, not the runner's system bus.
+        # Ubuntu provides dbus-daemon through the dbus package.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dbus
+          scripts/check.sh
 
       - name: Verify immutable release assets
         run: |

@@ -1,5 +1,6 @@
 //! Sole Venus OS D-Bus boundary for the standalone winter controller.
 
+use crate::config::{BMS_ALLOW_TO_CHARGE_PATH, BMS_MAX_CHARGE_CURRENT_PATH};
 use crate::domain::DbusFailureKind;
 use crate::ports::{DbusPort, PortError};
 use std::io::ErrorKind;
@@ -7,15 +8,65 @@ use std::thread;
 use std::time::Duration;
 use zbus::blocking::connection::Builder;
 use zbus::blocking::{Connection, Proxy};
+use zbus::message::{Message, Type};
 use zbus::zvariant::{Array, OwnedValue};
 
 const BUS_ITEM_INTERFACE: &str = "com.victronenergy.BusItem";
 const RETRY_DELAY: Duration = Duration::from_millis(100);
+const UNKNOWN_OBJECT_ERROR: &str = "org.freedesktop.DBus.Error.UnknownObject";
+
+#[derive(Default)]
+struct BmsOptionalPath {
+    missing_for: Option<(String, String)>,
+    verified_owner: Option<(String, String)>,
+}
+
+impl BmsOptionalPath {
+    fn begin_cycle(&mut self) {
+        self.verified_owner = None;
+    }
+
+    fn is_missing(&self, service: &str) -> bool {
+        self.missing_for
+            .as_ref()
+            .is_some_and(|identity| identity.0 == service)
+            && self.missing_for == self.verified_owner
+    }
+
+    fn observe(&mut self, service: &str, path: &str, reply: Option<&Message>) {
+        if path == BMS_MAX_CHARGE_CURRENT_PATH {
+            // The mandatory CCL reply verifies the owner without a separate bus query.
+            self.verified_owner = reply
+                .filter(|reply| reply.message_type() == Type::MethodReturn)
+                .and_then(|reply| reply_identity(service, reply));
+            if self.missing_for != self.verified_owner {
+                self.missing_for = None;
+            }
+        } else if path == BMS_ALLOW_TO_CHARGE_PATH {
+            self.missing_for = reply
+                .filter(|reply| {
+                    reply.message_type() == Type::Error
+                        && reply
+                            .header()
+                            .error_name()
+                            .is_some_and(|name| name.as_str() == UNKNOWN_OBJECT_ERROR)
+                })
+                .and_then(|reply| reply_identity(service, reply));
+        }
+    }
+}
+
+fn reply_identity(service: &str, reply: &Message) -> Option<(String, String)> {
+    let header = reply.header();
+    let owner = header.sender()?;
+    Some((service.to_owned(), owner.as_str().to_owned()))
+}
 
 pub struct VenusDbus {
     connection: Connection,
     method_timeout: Duration,
     cycle_fault: Option<PortError>,
+    bms_optional_path: BmsOptionalPath,
 }
 
 impl VenusDbus {
@@ -30,6 +81,7 @@ impl VenusDbus {
                 connection,
                 method_timeout,
                 cycle_fault: None,
+                bms_optional_path: BmsOptionalPath::default(),
             })
             .map_err(|error| {
                 PortError::classified(
@@ -41,10 +93,21 @@ impl VenusDbus {
     }
 
     fn value(&mut self, service: &str, path: &str) -> Result<OwnedValue, PortError> {
-        self.call("DBus GetValue", |connection| {
+        let mut observed_reply = None;
+        let value = self.call("DBus GetValue", |connection| {
             let proxy = Proxy::new(connection, service, path, BUS_ITEM_INTERFACE)?;
-            proxy.call("GetValue", &())
-        })
+            let reply = proxy.call_method("GetValue", &());
+            if matches!(path, BMS_MAX_CHARGE_CURRENT_PATH | BMS_ALLOW_TO_CHARGE_PATH) {
+                observed_reply = match &reply {
+                    Ok(reply) | Err(zbus::Error::MethodError(_, _, reply)) => Some(reply.clone()),
+                    _ => None,
+                };
+            }
+            reply?.body().deserialize()
+        });
+        self.bms_optional_path
+            .observe(service, path, observed_reply.as_ref());
+        value
     }
 
     fn number(&mut self, service: &str, path: &str) -> Result<Option<f64>, PortError> {
@@ -138,6 +201,7 @@ impl VenusDbus {
         operation: &'static str,
         first_error: Option<&zbus::Error>,
     ) -> Result<(), PortError> {
+        self.bms_optional_path = BmsOptionalPath::default();
         self.connection = build_connection(self.method_timeout).map_err(|error| {
             let reason = first_error.map_or_else(
                 || "system-bus connection was closed".to_owned(),
@@ -160,6 +224,7 @@ fn build_connection(method_timeout: Duration) -> zbus::Result<Connection> {
 impl DbusPort for VenusDbus {
     fn begin_cycle(&mut self) {
         self.cycle_fault = None;
+        self.bms_optional_path.begin_cycle();
     }
 
     fn cycle_fault(&self) -> Option<PortError> {
@@ -167,6 +232,13 @@ impl DbusPort for VenusDbus {
     }
 
     fn measurement(&mut self, service: &str, path: &str) -> Result<Option<f64>, PortError> {
+        if path == BMS_ALLOW_TO_CHARGE_PATH
+            && self.cycle_fault.is_none()
+            && !self.connection.is_closed()
+            && self.bms_optional_path.is_missing(service)
+        {
+            return Ok(None);
+        }
         self.number(service, path)
             .map(|value| value.filter(|number| number.to_bits() != (-1.0_f64).to_bits()))
     }
@@ -201,6 +273,10 @@ impl DbusPort for VenusDbus {
         self.set_value(service, path, &OwnedValue::from(value))
     }
 }
+
+#[cfg(test)]
+#[path = "dbus_optional_path_tests.rs"]
+mod optional_path_tests;
 
 fn owned_number(value: &OwnedValue) -> Option<f64> {
     f64::try_from(value)

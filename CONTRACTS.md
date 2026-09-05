@@ -8,6 +8,11 @@ documented fields in `config.env` without changing this contract document or
 the default scenario corpus. Parsing bounds and cross-field invariants are
 executable configuration contracts.
 
+Calendar dates, charging windows, PV observation windows, and log timestamps
+use UTC independently of the operating-system time zone and `TZ`. Duration
+limits use monotonic time; calendar decisions still require a correct system
+UTC clock.
+
 ## Seasonal reserve
 
 - The default ESS minimum SoC is 10%; deployments may configure a higher
@@ -78,6 +83,14 @@ executable configuration contracts.
   VE.Bus `/Bms/AllowToCharge` are optional explicit inhibit signals. Missing or
   malformed optional signals are not guessed. `/SystemState/UserChargeLimited`
   is reported separately and never treated as a blanket charging prohibition.
+- An explicit `UnknownObject` for active-BMS `/Io/AllowToCharge` is remembered
+  only in RAM for that service and its unique D-Bus owner. Further probes are
+  skipped only after the current cycle's mandatory BMS current reply confirms
+  the same owner. A service change, owner change, connection recovery, or failed
+  owner verification invalidates the remembered absence. Existing permissions
+  remain live reads every cycle; timeouts and invalid values never establish
+  absence. No additional owner queries, introspection, or worker threads are
+  required.
 - Before applying the first stricter `MaxChargeCurrent`, the previous raw
   Victron value is durably captured and synchronized before the D-Bus write.
   Later constraints reuse that baseline; no mechanism may capture another
@@ -151,8 +164,7 @@ executable configuration contracts.
 - A 100% ceiling is allowed only when more than two complete date transitions
   have elapsed. For example, a reset on Monday permits 100% again on Thursday;
   Tuesday has age one and Wednesday age two.
-- Calendar dates, rather than elapsed 24-hour periods, define age. The GX uses
-  its local system date, which is UTC on the validated installations.
+- UTC calendar dates, rather than elapsed 24-hour periods, define age.
 - A backward date change or a forward discontinuity of more than one calendar
   day resets the volatile counter instead of making a full charge immediately
   due.

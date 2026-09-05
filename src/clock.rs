@@ -1,4 +1,4 @@
-//! Wall-clock boundary used by policy and deterministic scenario tests.
+//! UTC calendar and monotonic duration clocks for policy and scenario tests.
 
 use std::fs;
 use std::sync::OnceLock;
@@ -6,6 +6,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use time::{Month, OffsetDateTime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// UTC calendar fields; the legacy type name is retained for API compatibility.
 pub struct LocalDateTime {
     pub year: i32,
     pub month: u8,
@@ -32,6 +33,7 @@ pub trait Clock {
     fn monotonic_seconds(&self) -> f64 {
         self.epoch_seconds()
     }
+    /// Returns UTC calendar fields regardless of the host time zone or `TZ`.
     fn local_date_time(&self) -> LocalDateTime;
 }
 
@@ -48,7 +50,7 @@ impl Clock for SystemClock {
     }
 
     fn local_date_time(&self) -> LocalDateTime {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let now = OffsetDateTime::now_utc();
         LocalDateTime {
             year: now.year(),
             month: month_number(now.month()),
@@ -95,5 +97,29 @@ const fn month_number(month: Month) -> u8 {
         Month::October => 10,
         Month::November => 11,
         Month::December => 12,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Clock, SystemClock};
+    use time::{Date, Month, OffsetDateTime};
+
+    #[test]
+    fn calendar_fields_match_utc_epoch() -> Result<(), time::error::ComponentRange> {
+        let before = OffsetDateTime::now_utc().unix_timestamp();
+        let calendar = SystemClock.local_date_time();
+        let after = OffsetDateTime::now_utc().unix_timestamp();
+        let observed = Date::from_calendar_date(
+            calendar.year,
+            Month::try_from(calendar.month)?,
+            calendar.day,
+        )?
+        .with_hms(calendar.hour, calendar.minute, calendar.second)?
+        .assume_utc()
+        .unix_timestamp();
+
+        assert!((before..=after).contains(&observed));
+        Ok(())
     }
 }
