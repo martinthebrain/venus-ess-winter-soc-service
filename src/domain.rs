@@ -168,12 +168,19 @@ pub struct PendingMinimumSocWrite {
     pub intended: f64,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ChargeCeilingState {
     pub reference_day: Option<i32>,
     pub observed_day: Option<i32>,
     pub near_full_latched: bool,
+    pub full_charge_completed_day: Option<i32>,
+    #[serde(skip)]
+    pub full_charge_in_progress: bool,
+    #[serde(skip)]
+    pub near_full_since_monotonic: Option<f64>,
+    #[serde(skip)]
+    pub near_full_last_sample_monotonic: Option<f64>,
 }
 
 #[allow(clippy::struct_excessive_bools)]

@@ -1107,6 +1107,10 @@ fn validate_identity_state(state: &ControllerState) -> Result<(), String> {
             "charge_ceiling.observed_day",
             state.charge_ceiling.observed_day,
         ),
+        (
+            "charge_ceiling.full_charge_completed_day",
+            state.charge_ceiling.full_charge_completed_day,
+        ),
     ] {
         if day.is_some_and(|value| !(0..=4_000_000).contains(&value)) {
             return Err(format!("{name} is outside the accepted range"));

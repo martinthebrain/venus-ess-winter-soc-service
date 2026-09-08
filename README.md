@@ -69,10 +69,16 @@ release hysteresis, and uses durable ownership, a write-ahead record, and
 readback for crash recovery. Existing external 0 A limits are left untouched;
 an external change while the controller owns the limit immediately releases
 ownership. After more than two calendar-day transitions
-without a near-full charge, the ceiling becomes 100%; reaching at least 98%
-resets the volatile counter. The counter lives only in the RAM state and
+without a confirmed full charge, full charging is permitted. At least two
+continuous hours at or above 99% reset the volatile counter. Full charging
+remains permitted for the rest of that UTC date, including at 100% SoC; the
+routine 90% ceiling resumes on the following UTC date. A SoC drop below 99%,
+missing telemetry, or a sample gap over 90 seconds restarts the confirmation.
+Unconfirmed full charging remains permitted across midnight. The counter lives only in the RAM state and
 therefore starts at day zero after a GX reboot. All percentages and the
-calendar interval are deployment-configurable.
+calendar interval, confirmation duration, and maximum sample gap are
+deployment-configurable. Confirmation duration uses monotonic time and is not
+restored across process restarts. BMS and external limits remain effective.
 
 One arbiter owns that shared DVCC setting for every controller mechanism. It
 combines the configured current, reserve-current, routine-ceiling, and explicit

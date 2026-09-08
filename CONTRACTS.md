@@ -159,11 +159,20 @@ UTC clock.
   write in that cycle. Unavailable current telemetry, failed durable intent,
   failed writes, and failed readback are exposed as bounded diagnostics and
   retried without speculative state changes.
-- A near-full sample at or above 98% resets a volatile calendar-day counter.
-  The same reset occurs on first startup after the GX RAM has been cleared.
-- A 100% ceiling is allowed only when more than two complete date transitions
-  have elapsed. For example, a reset on Monday permits 100% again on Thursday;
-  Tuesday has age one and Wednesday age two.
+- At least two continuous hours at or above 99% confirm a full charge and reset
+  a volatile calendar-day counter. A single 99% sample does not qualify.
+  A SoC drop below 99%, missing required telemetry, a sample gap over 90 seconds,
+  or a monotonic-clock discontinuity restarts the hold. Unconfirmed duration is
+  not restored after a process restart and does not cause periodic disk writes.
+- Full-charge permission becomes due after more than two date transitions.
+  For example, confirmation on Monday permits another full charge on Thursday;
+  Tuesday has age one and Wednesday age two. Unconfirmed full-charge permission
+  remains active across midnight. A new unlatched near-full observation also
+  permits completion of the hold instead of immediately imposing 0 A.
+- Confirmation preserves full-charge permission through the remainder of its
+  UTC date, including at 100% SoC. Only on the next UTC date does the routine
+  90% ceiling resume. A hold crossing midnight uses its confirmation date.
+  BMS, explicit inhibit, and external current limits remain effective.
 - UTC calendar dates, rather than elapsed 24-hour periods, define age.
 - A backward date change or a forward discontinuity of more than one calendar
   day resets the volatile counter instead of making a full charge immediately
@@ -173,10 +182,11 @@ UTC clock.
 - A seasonal target above the active routine ceiling is deferred to that
   ceiling. A due or active winter balancing cycle instead raises the effective
   ceiling to its balancing target in the same controller cycle and restores a
-  previously owned 0 W routine override.
-- Reaching 98% during balancing still resets the volatile calendar counter but
-  cannot revoke the balancing ceiling. Success, the approach timeout, or the
-  high-SoC timeout restores the routine ceiling in that same controller cycle.
+  previously owned 0 A routine override.
+- Winter balancing has priority over the routine ceiling, including at 100%.
+  The two-hour confirmation cannot revoke balancing permission. After balancing
+  ends, the routine calendar policy applies in the same cycle, including any
+  remaining permission through the full-charge confirmation date.
 
 ## Low-SoC discharge protection
 

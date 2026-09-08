@@ -39,8 +39,10 @@ pub const DISCHARGE_RECHARGE_CONFIRM_SECONDS: f64 = 120.0;
 pub const DISCHARGE_RECHARGE_MAX_SAMPLE_GAP_SECONDS: f64 = 90.0;
 pub const ROUTINE_MAX_CHARGE_SOC: f64 = 90.0;
 pub const FULL_MAX_CHARGE_SOC: f64 = 100.0;
-pub const FULL_CHARGE_REACHED_SOC: f64 = 98.0;
+pub const FULL_CHARGE_REACHED_SOC: f64 = 99.0;
 pub const FULL_CHARGE_MIN_AGE_DAYS: usize = 2;
+pub const FULL_CHARGE_CONFIRM_SECONDS: f64 = 7_200.0;
+pub const FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS: f64 = 90.0;
 pub const CHARGE_CEILING_CURRENT_EPSILON_A: f64 = 0.1;
 pub const STATUS_LOG_INTERVAL_SECONDS: f64 = 300.0;
 pub const INVALID_LOG_INTERVAL_SECONDS: f64 = 300.0;
@@ -141,6 +143,8 @@ pub struct PolicyConfig {
     pub full_max_charge_soc: f64,
     pub full_charge_reached_soc: f64,
     pub full_charge_min_age_days: usize,
+    pub full_charge_confirm_seconds: f64,
+    pub full_charge_max_sample_gap_seconds: f64,
     pub charge_ceiling_current_epsilon_a: f64,
     pub min_soc_epsilon: f64,
     pub boot_recovery_target_match_epsilon: f64,
@@ -198,6 +202,8 @@ impl Default for PolicyConfig {
             full_max_charge_soc: FULL_MAX_CHARGE_SOC,
             full_charge_reached_soc: FULL_CHARGE_REACHED_SOC,
             full_charge_min_age_days: FULL_CHARGE_MIN_AGE_DAYS,
+            full_charge_confirm_seconds: FULL_CHARGE_CONFIRM_SECONDS,
+            full_charge_max_sample_gap_seconds: FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS,
             charge_ceiling_current_epsilon_a: CHARGE_CEILING_CURRENT_EPSILON_A,
             min_soc_epsilon: MIN_SOC_EPSILON,
             boot_recovery_target_match_epsilon: BOOT_RECOVERY_TARGET_MATCH_EPSILON,
@@ -582,6 +588,20 @@ impl PolicyConfig {
             0.001,
             1.0,
         )?;
+        self.full_charge_confirm_seconds = configured_f64(
+            lookup,
+            "ESS_FULL_CHARGE_CONFIRM_SECONDS",
+            self.full_charge_confirm_seconds,
+            1.0,
+            86_400.0,
+        )?;
+        self.full_charge_max_sample_gap_seconds = configured_f64(
+            lookup,
+            "ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS",
+            self.full_charge_max_sample_gap_seconds,
+            1.0,
+            3_600.0,
+        )?;
         Ok(())
     }
 
@@ -667,6 +687,10 @@ impl PolicyConfig {
             self.routine_max_charge_soc < self.full_charge_reached_soc
                 && self.full_charge_reached_soc <= self.full_max_charge_soc,
             "charge ceiling values must satisfy routine < reached <= full",
+        )?;
+        require(
+            self.full_charge_max_sample_gap_seconds <= self.full_charge_confirm_seconds,
+            "ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS must not exceed ESS_FULL_CHARGE_CONFIRM_SECONDS",
         )?;
         require(
             self.balancing_target_soc <= self.full_max_charge_soc,
@@ -836,6 +860,10 @@ impl RuntimeConfig {
             config.loop_interval.as_secs_f64()
                 <= config.policy.discharge_recharge_max_sample_gap_seconds,
             "ESS_LOOP_INTERVAL_SECONDS must not exceed ESS_DISCHARGE_RECHARGE_MAX_SAMPLE_GAP_SECONDS",
+        )?;
+        require(
+            config.loop_interval.as_secs_f64() <= config.policy.full_charge_max_sample_gap_seconds,
+            "ESS_LOOP_INTERVAL_SECONDS must not exceed ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS",
         )?;
         Ok(config)
     }
@@ -1208,7 +1236,8 @@ fn env_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHARGE_CEILING_CURRENT_EPSILON_A, FULL_CHARGE_MIN_AGE_DAYS, FULL_CHARGE_REACHED_SOC,
+        CHARGE_CEILING_CURRENT_EPSILON_A, FULL_CHARGE_CONFIRM_SECONDS,
+        FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS, FULL_CHARGE_MIN_AGE_DAYS, FULL_CHARGE_REACHED_SOC,
         FULL_MAX_CHARGE_SOC, PolicyConfig, ROUTINE_MAX_CHARGE_SOC, parse_flag, valid_mmdd,
     };
     use std::collections::HashMap;
@@ -1318,6 +1347,8 @@ mod tests {
             full_charge_reached_soc: FULL_CHARGE_REACHED_SOC,
             full_charge_min_age_days: FULL_CHARGE_MIN_AGE_DAYS,
             charge_ceiling_current_epsilon_a: CHARGE_CEILING_CURRENT_EPSILON_A,
+            full_charge_confirm_seconds: FULL_CHARGE_CONFIRM_SECONDS,
+            full_charge_max_sample_gap_seconds: FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS,
             min_soc_epsilon: 0.2,
             boot_recovery_target_match_epsilon: 0.2,
             boot_recovery_seconds: 601.0,
@@ -1346,6 +1377,8 @@ mod tests {
             ("ESS_FULL_MAX_CHARGE_SOC", "100"),
             ("ESS_FULL_CHARGE_REACHED_SOC", "97"),
             ("ESS_FULL_CHARGE_MIN_AGE_DAYS", "3"),
+            ("ESS_FULL_CHARGE_CONFIRM_SECONDS", "10800"),
+            ("ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS", "120"),
             ("ESS_CHARGE_CEILING_CURRENT_EPSILON_A", "0.2"),
         ]);
         let policy =
@@ -1355,6 +1388,14 @@ mod tests {
         assert_eq!(policy.full_max_charge_soc.to_bits(), 100.0_f64.to_bits());
         assert_eq!(policy.full_charge_reached_soc.to_bits(), 97.0_f64.to_bits());
         assert_eq!(policy.full_charge_min_age_days, 3);
+        assert_eq!(
+            policy.full_charge_confirm_seconds.to_bits(),
+            10_800.0_f64.to_bits()
+        );
+        assert_eq!(
+            policy.full_charge_max_sample_gap_seconds.to_bits(),
+            120.0_f64.to_bits()
+        );
         assert_eq!(
             policy.charge_ceiling_current_epsilon_a.to_bits(),
             0.2_f64.to_bits()
@@ -1426,6 +1467,21 @@ mod tests {
         .err()
         .unwrap_or_else(|| std::process::abort());
         assert!(winter_error.to_string().contains("year-spanning"));
+    }
+
+    #[test]
+    fn invalid_full_charge_confirmation_settings_are_rejected() {
+        for (name, value) in [
+            ("ESS_FULL_CHARGE_CONFIRM_SECONDS", "0"),
+            ("ESS_FULL_CHARGE_CONFIRM_SECONDS", "NaN"),
+            ("ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS", "0"),
+            ("ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS", "inf"),
+            ("ESS_FULL_CHARGE_CONFIRM_SECONDS", "30"),
+        ] {
+            assert!(
+                PolicyConfig::from_lookup(|key| (key == name).then(|| value.to_owned())).is_err()
+            );
+        }
     }
 
     #[test]

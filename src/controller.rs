@@ -341,6 +341,7 @@ where
         self.update_pv_history(now, now_ts);
 
         let Some(current_soc) = self.read_current_soc(now_ts) else {
+            crate::charge_ceiling::interrupt_confirmation(&mut self.state.charge_ceiling);
             return self.decision(
                 generated_at,
                 &TargetMode {
@@ -356,6 +357,7 @@ where
         let Some(current_min_soc) = current_min_soc.filter(|value| {
             *value >= MIN_VALID_SOC && *value <= MAX_VALID_SOC && value.is_finite()
         }) else {
+            crate::charge_ceiling::interrupt_confirmation(&mut self.state.charge_ceiling);
             self.log_invalid_min_soc(now_ts);
             return self.decision(
                 generated_at,
@@ -373,7 +375,7 @@ where
             self.measurement_optional(&self.config.system_service.clone(), BATTERY_POWER_PATH);
         self.refresh_charge_constraints(now, now_ts);
         self.apply_discharge_protection(current_soc, battery_power, now, now_ts);
-        let mut ceiling = self.evaluate_charge_ceiling(current_soc, battery_power, now);
+        let mut ceiling = self.evaluate_charge_ceiling(current_soc, now, now_ts);
 
         let target =
             self.track_and_determine_target(current_soc, &mut ceiling, now, generated_at, now_ts);
@@ -790,19 +792,20 @@ where
     fn evaluate_charge_ceiling(
         &mut self,
         current_soc: f64,
-        battery_power_w: Option<f64>,
         now: LocalDateTime,
+        now_ts: f64,
     ) -> ChargeCeilingEvaluation {
         let evaluation = evaluate_charge_ceiling(
             &self.config.policy,
             &mut self.state.charge_ceiling,
             now,
             current_soc,
-            battery_power_w,
+            now_ts,
         );
         if evaluation.near_full_observed {
             self.logger.log(&format!(
-                "Near-full charge observed at {current_soc:.1}% SoC; calendar counter reset"
+                "Full charge confirmed at {current_soc:.1}% SoC after {} seconds; routine ceiling resumes next UTC day",
+                self.config.policy.full_charge_confirm_seconds
             ));
         }
         if evaluation.state_changed {
@@ -823,12 +826,13 @@ where
         self.full_charge_due = Some(evaluation.full_charge_due);
         self.full_charge_age_days = Some(evaluation.age_days);
         let was_requested = self.state.charge_current_control.routine_ceiling_requested;
-        let should_limit = charge_current_limit_required(
-            was_requested,
-            current_soc,
-            evaluation.ceiling_soc,
-            self.config.policy.soc_hysteresis,
-        );
+        let should_limit = !evaluation.full_charge_permitted
+            && charge_current_limit_required(
+                was_requested,
+                current_soc,
+                evaluation.ceiling_soc,
+                self.config.policy.soc_hysteresis,
+            );
         self.charge_current_ceiling_active = should_limit;
         let retain_owned_limit = charging_inhibited && was_requested;
         let effective_should_limit = should_limit || retain_owned_limit;
@@ -1150,6 +1154,7 @@ where
             now_ts,
         );
         if self.state.balancing_active {
+            ceiling.full_charge_permitted = true;
             ceiling.ceiling_soc = ceiling
                 .ceiling_soc
                 .max(self.config.policy.balancing_target_soc);

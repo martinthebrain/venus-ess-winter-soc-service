@@ -43,6 +43,38 @@ impl Clock for FixedClock {
     }
 }
 
+#[derive(Clone)]
+struct AdvancingClock(Arc<Mutex<FixedClock>>);
+
+impl Clock for AdvancingClock {
+    fn epoch_seconds(&self) -> f64 {
+        self.0
+            .lock()
+            .unwrap_or_else(|_| std::process::abort())
+            .epoch
+    }
+
+    fn monotonic_seconds(&self) -> f64 {
+        self.0
+            .lock()
+            .unwrap_or_else(|_| std::process::abort())
+            .monotonic
+    }
+
+    fn local_date_time(&self) -> LocalDateTime {
+        self.0
+            .lock()
+            .unwrap_or_else(|_| std::process::abort())
+            .local
+    }
+}
+
+impl AdvancingClock {
+    fn set(&self, time: FixedClock) {
+        *self.0.lock().unwrap_or_else(|_| std::process::abort()) = time;
+    }
+}
+
 #[derive(Clone, Default)]
 struct FakeDbus {
     shared: Arc<Mutex<FakeDbusState>>,
@@ -793,6 +825,7 @@ fn full_ceiling_is_enabled_on_the_fourth_calendar_date() {
             reference_day: calendar_day_number(clock(9, 1, 12, 0.0).local),
             observed_day: calendar_day_number(clock(9, 3, 12, 0.0).local),
             near_full_latched: false,
+            ..Default::default()
         },
         last_sample_date: "2026-09-04".to_owned(),
         ..ControllerState::default()
@@ -815,14 +848,15 @@ fn full_ceiling_is_enabled_on_the_fourth_calendar_date() {
 }
 
 #[test]
-fn near_full_charge_resets_age_and_restores_the_90_percent_ceiling_without_balancing() {
+fn a_single_near_full_sample_does_not_end_the_full_charge_permission() {
     let bus = base_bus();
-    bus.value("system", BATTERY_SOC_PATH, 98.0);
+    bus.value("system", BATTERY_SOC_PATH, 99.0);
     let state = ControllerState {
         charge_ceiling: venus_ess_winter_soc_service::domain::ChargeCeilingState {
             reference_day: calendar_day_number(clock(9, 1, 12, 0.0).local),
             observed_day: calendar_day_number(clock(9, 3, 12, 0.0).local),
             near_full_latched: false,
+            ..Default::default()
         },
         last_sample_date: "2026-09-04".to_owned(),
         ..ControllerState::default()
@@ -838,11 +872,11 @@ fn near_full_charge_resets_age_and_restores_the_90_percent_ceiling_without_balan
 
     let decision = controller.run_once();
 
-    assert_eq!(decision.requested_charge_ceiling_current_a, Some(0.0));
-    assert!(decision.charge_current_ceiling_active);
-    assert!(decision.charge_current_ceiling_owned);
-    assert_eq!(decision.full_charge_due, Some(false));
-    assert_eq!(decision.full_charge_age_days, Some(0));
+    assert_eq!(decision.requested_charge_ceiling_current_a, None);
+    assert!(!decision.charge_current_ceiling_active);
+    assert!(!decision.charge_current_ceiling_owned);
+    assert_eq!(decision.full_charge_due, Some(true));
+    assert_eq!(decision.full_charge_age_days, Some(3));
 }
 
 #[test]
@@ -872,9 +906,125 @@ fn due_winter_balancing_enables_the_full_ceiling_in_the_start_cycle() {
 }
 
 #[test]
-fn active_balancing_keeps_the_full_ceiling_after_the_98_percent_reset() {
+fn confirmed_full_charge_sets_zero_current_only_on_the_following_utc_date() {
     let bus = base_bus();
-    bus.value("system", BATTERY_SOC_PATH, 98.0);
+    bus.value("system", BATTERY_SOC_PATH, 99.0);
+    bus.value("settings", MAX_CHARGE_CURRENT_PATH, 17.0);
+    let time = AdvancingClock(Arc::new(Mutex::new(clock(9, 4, 20, 2_000.0))));
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        time.clone(),
+        FakeLog::default(),
+        config(false),
+        ControllerState::default(),
+    );
+
+    for minute in 0..=120 {
+        time.set(clock(9, 4, 22, 2_000.0 + f64::from(minute * 60)));
+        if minute == 60 {
+            bus.value("system", BATTERY_SOC_PATH, 100.0);
+        }
+        let decision = controller.run_once();
+        assert!(!decision.charge_current_ceiling_active);
+        assert_eq!(decision.charge_ceiling_soc, Some(100.0));
+        assert_eq!(
+            controller
+                .state
+                .charge_ceiling
+                .full_charge_completed_day
+                .is_some(),
+            minute == 120
+        );
+    }
+    time.set(clock(9, 4, 23, 12_800.0));
+    assert!(!controller.run_once().charge_current_ceiling_active);
+    assert!(bus.writes().is_empty());
+    time.set(clock(9, 5, 0, 16_400.0));
+    let decision = controller.run_once();
+    assert!(decision.charge_current_ceiling_active);
+    assert_eq!(decision.requested_charge_ceiling_current_a, Some(0.0));
+    assert_eq!(
+        controller.state.charge_current_control.external_baseline_a,
+        Some(17.0)
+    );
+}
+
+#[test]
+fn missing_soc_interrupts_full_confirmation_in_the_controller() {
+    let bus = base_bus();
+    bus.value("system", BATTERY_SOC_PATH, 99.0);
+    let time = AdvancingClock(Arc::new(Mutex::new(clock(9, 4, 20, 2_000.0))));
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        time.clone(),
+        FakeLog::default(),
+        config(false),
+        ControllerState::default(),
+    );
+    let _ = controller.run_once();
+    assert!(
+        controller
+            .state
+            .charge_ceiling
+            .near_full_since_monotonic
+            .is_some()
+    );
+    bus.value("system", BATTERY_SOC_PATH, f64::NAN);
+    time.set(clock(9, 4, 20, 2_060.0));
+    assert_eq!(controller.run_once().outcome, CycleOutcome::MissingSoc);
+    assert_eq!(
+        controller.state.charge_ceiling.near_full_since_monotonic,
+        None
+    );
+    bus.value("system", BATTERY_SOC_PATH, 99.0);
+    time.set(clock(9, 4, 20, 2_080.0));
+    let _ = controller.run_once();
+    assert_eq!(
+        controller.state.charge_ceiling.near_full_since_monotonic,
+        Some(2_080.0)
+    );
+}
+
+#[test]
+fn active_winter_balancing_does_not_impose_zero_at_100_percent_after_confirmation_day() {
+    let bus = base_bus();
+    bus.value("system", BATTERY_SOC_PATH, 100.0);
+    let mut state = ControllerState {
+        balancing_active: true,
+        balancing_start_ts: 1_000.0,
+        last_balance_attempt_ts: 1_000.0,
+        last_sample_date: "2026-01-02".to_owned(),
+        ..ControllerState::default()
+    };
+    state.charge_ceiling.reference_day = calendar_day_number(clock(1, 1, 0, 0.0).local);
+    state.charge_ceiling.observed_day = state.charge_ceiling.reference_day;
+    state.charge_ceiling.full_charge_completed_day = state.charge_ceiling.reference_day;
+    state.charge_ceiling.near_full_latched = true;
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(1, 2, 0, 2_000.0),
+        FakeLog::default(),
+        config(false),
+        state,
+    );
+    let decision = controller.run_once();
+    assert!(controller.state.balancing_active);
+    assert!(!decision.charge_current_ceiling_active);
+    assert_eq!(decision.requested_charge_ceiling_current_a, None);
+    assert!(
+        bus.writes()
+            .iter()
+            .all(|(_, path, value)| path != MAX_CHARGE_CURRENT_PATH || *value != 0.0)
+    );
+}
+
+#[test]
+fn active_balancing_keeps_the_full_ceiling_while_99_percent_is_unconfirmed() {
+    let bus = base_bus();
+    bus.value("system", BATTERY_SOC_PATH, 99.0);
     let state = ControllerState {
         balancing_active: true,
         balancing_start_ts: 1_000.0,
@@ -948,6 +1098,14 @@ fn completed_balancing_restores_the_routine_ceiling_in_the_same_cycle() {
     let bus = base_bus();
     bus.value("system", BATTERY_SOC_PATH, 99.0);
     let state = ControllerState {
+        charge_ceiling: venus_ess_winter_soc_service::domain::ChargeCeilingState {
+            reference_day: calendar_day_number(clock(1, 1, 0, 0.0).local).map(|day| day - 1),
+            observed_day: calendar_day_number(clock(1, 1, 0, 0.0).local),
+            full_charge_completed_day: calendar_day_number(clock(1, 1, 0, 0.0).local)
+                .map(|day| day - 1),
+            near_full_latched: true,
+            ..Default::default()
+        },
         balancing_active: true,
         balancing_start_ts: 1_000.0,
         balancing_high_soc_start_ts: 1_000.0,
@@ -1096,6 +1254,7 @@ fn a_due_full_charge_releases_an_owned_routine_current_ceiling() {
             reference_day: calendar_day_number(clock(9, 1, 12, 0.0).local),
             observed_day: calendar_day_number(clock(9, 3, 12, 0.0).local),
             near_full_latched: false,
+            ..Default::default()
         },
         charge_current_control: ChargeCurrentControlState {
             external_baseline_a: Some(-1.0),
