@@ -162,7 +162,7 @@ impl<P: DbusPort, S: StatePort, C: Clock, L: LogSink> Controller<P, S, C, L> {
             .battery_current
             .max_charge_current_a
             .min(bms_limit);
-        Ok(ExportSample {
+        let sample = ExportSample {
             battery_current_a: self
                 .raw(&system, "/Dc/Battery/Current")
                 .ok_or("battery_current_unavailable")?,
@@ -187,7 +187,11 @@ impl<P: DbusPort, S: StatePort, C: Clock, L: LogSink> Controller<P, S, C, L> {
                 limit
             },
             efficiency: self.config.battery_current.inverter_efficiency,
-        })
+        };
+        sample
+            .valid()
+            .then_some(sample)
+            .ok_or("export_telemetry_invalid")
     }
 
     fn pv_export_grid_power(&mut self) -> Option<f64> {
@@ -201,10 +205,12 @@ impl<P: DbusPort, S: StatePort, C: Clock, L: LogSink> Controller<P, S, C, L> {
         let mut watts = 0.0;
         for phase in super::PHASES.iter().take(count) {
             // -1 W is valid grid export, not a measurement-unavailable sentinel.
-            watts += self.raw(
-                &system,
-                &super::AC_GRID_POWER_PATH.replace(super::PHASE_PLACEHOLDER, phase),
-            )?;
+            watts += self
+                .raw(
+                    &system,
+                    &super::AC_GRID_POWER_PATH.replace(super::PHASE_PLACEHOLDER, phase),
+                )
+                .filter(|v| v.abs() <= 1_000_000.0)?;
         }
         Some(watts)
     }

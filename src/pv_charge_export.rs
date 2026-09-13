@@ -107,6 +107,22 @@ pub struct ExportSample {
     pub efficiency: f64,
 }
 
+impl ExportSample {
+    #[must_use]
+    pub fn valid(self) -> bool {
+        let bounded = |v: f64, min: f64, max: f64| v.is_finite() && (min..=max).contains(&v);
+        bounded(self.battery_current_a, -10_000.0, 10_000.0)
+            && bounded(self.voltage_v, 1.0, 1_000.0)
+            && bounded(self.dc_pv_w, 0.0, MAX_POWER_W)
+            && bounded(self.grid_w, -MAX_POWER_W, MAX_POWER_W)
+            && bounded(self.baseline_w, -MAX_POWER_W, MAX_POWER_W)
+            && bounded(self.limit_a, 0.0, 10_000.0)
+            && (self.max_export_w.to_bits() == (-1.0_f64).to_bits()
+                || bounded(self.max_export_w, 0.0, MAX_POWER_W))
+            && bounded(self.efficiency, 0.5, 1.0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExportPlan {
     pub setpoint_w: Option<f64>,
@@ -121,17 +137,7 @@ pub struct ExportPlan {
 #[must_use]
 pub fn plan(sample: ExportSample, active: bool) -> ExportPlan {
     let s = sample;
-    let bounded = |v: f64, min: f64, max: f64| v.is_finite() && (min..=max).contains(&v);
-    if !bounded(s.battery_current_a, -10_000.0, 10_000.0)
-        || !bounded(s.voltage_v, 1.0, 1_000.0)
-        || !bounded(s.dc_pv_w, 0.0, MAX_POWER_W)
-        || !bounded(s.grid_w, -MAX_POWER_W, MAX_POWER_W)
-        || !bounded(s.baseline_w, -MAX_POWER_W, MAX_POWER_W)
-        || !bounded(s.limit_a, 0.0, 10_000.0)
-        || !(s.max_export_w.to_bits() == (-1.0_f64).to_bits()
-            || bounded(s.max_export_w, 0.0, MAX_POWER_W))
-        || !bounded(s.efficiency, 0.5, 1.0)
-    {
+    if !s.valid() {
         return ExportPlan {
             setpoint_w: None,
             reason: "export_telemetry_invalid",

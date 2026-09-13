@@ -4380,6 +4380,27 @@ fn pv_export_shutdown_does_not_erase_an_external_override() {
 }
 
 #[test]
+fn pv_export_invalid_telemetry_cannot_poison_the_recovery_journal() {
+    for (service, path, value) in [
+        ("settings", "/Settings/CGwacs/AcPowerSetPoint", 1e100),
+        ("system", "/Dc/Battery/Current", -1e100),
+        ("system", "/Ac/Grid/L1/Power", 1e100),
+        ("system", BATTERY_VOLTAGE_PATH, -1.0),
+    ] {
+        let bus = pv_export_bus();
+        let store = FakeStore::default();
+        let mut controller =
+            pv_export_controller(&bus, store.clone(), ControllerState::default(), false);
+        controller.run_battery_current_once();
+        bus.value(service, path, value);
+        let result = controller.run_battery_current_once();
+        assert!(result.charge_unenforced_reason.is_some());
+        assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None);
+        assert!(store.latest_state().pv_charge_export.valid());
+    }
+}
+
+#[test]
 fn pv_export_crash_before_and_after_write_recovers_without_replaying_stale_pv() {
     for effect in [ScriptEffect::CrashBefore, ScriptEffect::CrashAfter] {
         let bus = pv_export_bus();
