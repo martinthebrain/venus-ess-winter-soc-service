@@ -190,6 +190,26 @@ UTC clock.
 
 ## Low-SoC discharge protection
 
+- Optional battery-current limiting is off by default, configurable independently
+  for charging, discharging, or both. Limits apply to the total battery bank.
+- The discharge-current constraint and low-SoC latch share one original setting,
+  pending generation and readback/recovery boundary. A pending dynamic write is
+  never replayed from stale PV; an already applied write recovers ownership
+  before calculating the current target. Disabled current control retains a
+  still-needed low-SoC constraint, otherwise restoring the external baseline.
+- Charging uses an additional constraint in the existing DVCC arbiter, not a
+  second writer. Reserve and routine controls cannot clear this constraint.
+  Native DVCC/BMS restrictions remain authoritative. DC-PV feed-in bypass and
+  disabled/unknown DVCC are explicitly reported as unenforced charging limits;
+  the service does not alter these settings or claim a hardware guarantee.
+- The enabled lightweight cycle reads current telemetry without replaying the
+  seasonal policy. All setting writes, including its recovery paths, obey
+  shadow mode, durable intent and readback requirements.
+- DC-PV allowances expire with the current read. Current/voltage/BMS telemetry
+  failures request 0 W instead of retaining a permissive old allowance.
+- The discharge actor is an ESS grid-connected inverter power limit, not a
+  battery isolator: island operation and independent DC loads cannot be limited.
+
 - While the battery is discharging, a SoC strictly below 20% activates an
   independent discharge-power guard. It does not depend on the configured ESS
   minimum SoC.

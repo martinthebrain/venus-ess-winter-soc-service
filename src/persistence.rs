@@ -716,6 +716,10 @@ fn validate_charge_current_control_state(state: &ControllerState) -> Result<(), 
     )?;
     for (name, value) in [
         (
+            "charge_current_control.battery_constraint_a",
+            control.battery_constraint_a,
+        ),
+        (
             "charge_current_control.configured_constraint_a",
             control.configured_constraint_a,
         ),
@@ -1137,6 +1141,11 @@ fn validate_identity_state(state: &ControllerState) -> Result<(), String> {
 
 fn validate_discharge_state(state: &ControllerState) -> Result<(), String> {
     let protection = &state.discharge_protection;
+    if (protection.current_limit_managed && !protection.active)
+        || (protection.low_soc_latched && !protection.current_limit_managed)
+    {
+        return Err("dynamic discharge constraints have no active arbiter".to_owned());
+    }
     validate_optional_range(
         "discharge_protection.restore_power_w",
         protection.restore_power_w,
@@ -1727,6 +1736,7 @@ mod tests {
 
     fn repository_config(root: &std::path::Path) -> RuntimeConfig {
         RuntimeConfig {
+            battery_current: crate::config::BatteryCurrentConfig::default(),
             settings_service: "settings".to_owned(),
             system_service: "system".to_owned(),
             fallback_battery_service: None,
@@ -2473,6 +2483,52 @@ mod tests {
         assert!(
             validate_state_value(&above_hardware, &config.state_device_id, 100.0, false).is_err()
         );
+    }
+
+    #[test]
+    fn current_limit_ownership_round_trips_and_rejects_unbound_constraints() {
+        let state = ControllerState {
+            nominal_inverter_power_last: Some(10_000.0),
+            nominal_inverter_power_configured: true,
+            charge_current_control: crate::domain::ChargeCurrentControlState {
+                battery_constraint_a: Some(75.0),
+                external_baseline_a: Some(-1.0),
+                owned: true,
+                write_generation: 1,
+                pending_write: Some(crate::domain::PendingChargeCurrentWrite {
+                    generation: 1,
+                    kind: crate::domain::ChargeCurrentWriteKind::Restrict,
+                    expected_before_a: -1.0,
+                    intended_a: 75.0,
+                }),
+                ..crate::domain::ChargeCurrentControlState::default()
+            },
+            discharge_protection: crate::domain::DischargeProtectionState {
+                active: true,
+                current_limit_managed: true,
+                restore_default: true,
+                last_observed_power_w: Some(-1.0),
+                write_generation: 1,
+                pending_write: Some(crate::domain::PendingDischargeWrite {
+                    generation: 1,
+                    kind: crate::domain::DischargeWriteKind::Restrict,
+                    expected_before_w: -1.0,
+                    intended_w: 3250.0,
+                }),
+                ..crate::domain::DischargeProtectionState::default()
+            },
+            ..ControllerState::default()
+        };
+        let value =
+            state_value(&state, "current-limit-test").unwrap_or_else(|_| std::process::abort());
+        assert!(validate_state_value(&value, "current-limit-test", 100.0, false).is_ok());
+        let decoded: ControllerState =
+            serde_json::from_value(value.clone()).unwrap_or_else(|_| std::process::abort());
+        assert_eq!(decoded.discharge_protection, state.discharge_protection);
+        assert_eq!(decoded.charge_current_control, state.charge_current_control);
+        let mut invalid = value;
+        invalid["discharge_protection"]["active"] = json!(false);
+        assert!(validate_state_value(&invalid, "current-limit-test", 100.0, false).is_err());
     }
 
     #[test]

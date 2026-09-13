@@ -3,6 +3,12 @@ use std::process::Command;
 #[test]
 fn invalid_runtime_tuning_fails_before_connecting_to_dbus() {
     let cases = [
+        ("ESS_BATTERY_CURRENT_LIMIT_ENABLED", "tru"),
+        ("ESS_BATTERY_CURRENT_LIMIT_MODE", "charging"),
+        ("ESS_BATTERY_CURRENT_LIMIT_MODE", ""),
+        ("ESS_BATTERY_CHARGE_MAX_CURRENT_A", "NaN"),
+        ("ESS_BATTERY_DISCHARGE_MAX_CURRENT_A", "-1"),
+        ("ESS_BATTERY_CURRENT_INTERVAL_SECONDS", "0"),
         ("ESS_LOOP_INTERVAL_SECONDS", "4"),
         ("ESS_LOOP_INTERVAL_SECONDS", "91"),
         ("ESS_DBUS_TIMEOUT_SECONDS", "0"),

@@ -180,6 +180,107 @@ pub fn commit_action(state: &mut DischargeProtectionState, action: ProtectionAct
     }
 }
 
+/// Combine current and low-SoC constraints under one original setting and WAL.
+/// `None` disables the current constraint; missing enabled telemetry supplies 0 W.
+#[must_use]
+pub fn evaluate_current_limited(
+    policy: &PolicyConfig,
+    state: &mut DischargeProtectionState,
+    input: ProtectionInput,
+    current_constraint_w: Option<f64>,
+) -> ProtectionEvaluation {
+    if current_constraint_w.is_none() && !state.current_limit_managed {
+        return evaluate(policy, state, input);
+    }
+    let previous = state.clone();
+    let mut evaluation = ProtectionEvaluation::default();
+    let (Some(current), Some(nominal)) = (
+        normalized_setting(input.current_limit_w, input.nominal_inverter_power_w),
+        valid_nominal(input.nominal_inverter_power_w),
+    ) else {
+        return evaluation;
+    };
+    if !state.current_limit_managed {
+        state.low_soc_latched = state.active;
+        if !state.active {
+            let Some(target) = restore_target(current, nominal) else {
+                return evaluation;
+            };
+            set_restore_target(state, target);
+            state.last_observed_power_w = Some(current);
+        }
+        state.current_limit_managed = true;
+        state.active = true;
+    }
+    update_current_limited_low_soc(policy, state, input, &mut evaluation);
+    if state
+        .last_observed_power_w
+        .is_some_and(|last| !same_power(last, current, policy.discharge_power_epsilon_w))
+    {
+        let Some(target) = restore_target(current, nominal) else {
+            return evaluation;
+        };
+        set_restore_target(state, target);
+        state.last_set_power_w = None;
+        state.last_observed_power_w = Some(current);
+        evaluation.events.mark(ProtectionEvents::EXTERNAL_CHANGE);
+    }
+    let baseline = if state.restore_default {
+        DEFAULT_DISCHARGE_POWER_W
+    } else {
+        state.restore_power_w.unwrap_or(0.0).min(nominal)
+    };
+    if current_constraint_w.is_none() && !state.low_soc_latched {
+        if same_power(current, baseline, policy.discharge_power_epsilon_w) {
+            reset_protection(state);
+            evaluation.events.mark(ProtectionEvents::RELEASED);
+        } else {
+            evaluation.action = Some(ProtectionAction::Restore(baseline));
+        }
+    } else {
+        let mut cap = current_constraint_w.unwrap_or(nominal).clamp(0.0, nominal);
+        if state.low_soc_latched {
+            cap = cap.min(nominal * policy.discharge_protection_nominal_fraction);
+        }
+        if baseline >= 0.0 {
+            cap = cap.min(baseline);
+        }
+        if !same_power(current, cap, policy.discharge_power_epsilon_w) {
+            evaluation.action = Some(ProtectionAction::Restrict(cap));
+        }
+    }
+    evaluation.state_changed = *state != previous;
+    evaluation
+}
+
+fn update_current_limited_low_soc(
+    policy: &PolicyConfig,
+    state: &mut DischargeProtectionState,
+    input: ProtectionInput,
+    evaluation: &mut ProtectionEvaluation,
+) {
+    if !state.low_soc_latched
+        && input.soc < policy.discharge_protection_enter_soc
+        && input.battery_power_w.is_some_and(|power| power < 0.0)
+    {
+        state.low_soc_latched = true;
+        state.recharge_seen = false;
+        reset_recharge_candidate(state);
+        evaluation.events.mark(ProtectionEvents::ACTIVATED);
+    }
+    if !state.low_soc_latched {
+        return;
+    }
+    if confirm_recharge(policy, state, input.battery_power_w, input.monotonic_now) {
+        evaluation.events.mark(ProtectionEvents::RECHARGE_SEEN);
+    }
+    if state.recharge_seen && input.soc > policy.discharge_protection_release_soc {
+        state.low_soc_latched = false;
+        state.recharge_seen = false;
+        reset_recharge_candidate(state);
+    }
+}
+
 #[must_use]
 pub fn normalized_setting(value: Option<f64>, nominal: Option<f64>) -> Option<f64> {
     let current = valid_configured_limit(value)?;
@@ -244,6 +345,12 @@ fn pending_matches_current_policy(
         return false;
     };
     let expected_target = match pending.kind {
+        // Dynamic constraints are re-evaluated before every unapplied retry.
+        // A write already visible on D-Bus must first recover its ownership,
+        // even when PV, current or the enabled flag changed during the outage.
+        DischargeWriteKind::Restrict if state.current_limit_managed => {
+            return pending.intended_w.is_finite() && (0.0..=nominal).contains(&pending.intended_w);
+        }
         DischargeWriteKind::Restrict => {
             if !nominal_fraction.is_finite() || !(0.0..=1.0).contains(&nominal_fraction) {
                 return false;
@@ -511,6 +618,7 @@ mod tests {
             last_observed_power_w: Some(1_000.0),
             write_generation: 0,
             pending_write: None,
+            ..DischargeProtectionState::default()
         };
         let result = evaluate(&policy, &mut state, input(19.0, -500.0, 2_000.0, 2_500.0));
         assert!(result.events.external_change());
@@ -532,6 +640,7 @@ mod tests {
             last_observed_power_w: Some(1_000.0),
             write_generation: 0,
             pending_write: None,
+            ..DischargeProtectionState::default()
         };
         assert_eq!(
             evaluate(&policy, &mut state, input(26.0, 0.0, 1_000.0, 2_500.0)).action,
@@ -648,6 +757,7 @@ mod tests {
             last_observed_power_w: Some(1_000.0),
             write_generation: 0,
             pending_write: None,
+            ..DischargeProtectionState::default()
         };
 
         let release = evaluate(&policy, &mut state, input(25.1, 500.0, 1_000.0, 2_500.0));
@@ -753,6 +863,7 @@ mod tests {
             last_observed_power_w: Some(1_000.0),
             write_generation: 0,
             pending_write: None,
+            ..DischargeProtectionState::default()
         };
 
         let encoded = serde_json::to_value(&state).unwrap_or_else(|_| std::process::abort());

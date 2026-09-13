@@ -739,6 +739,7 @@ impl Error for ConfigError {}
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    pub battery_current: BatteryCurrentConfig,
     pub settings_service: String,
     pub system_service: String,
     pub fallback_battery_service: Option<String>,
@@ -777,6 +778,7 @@ impl RuntimeConfig {
         let shadow = env_flag("ESS_SHADOW_MODE")?;
         let paths = runtime_paths(shadow)?;
         let config = Self {
+            battery_current: BatteryCurrentConfig::from_env()?,
             settings_service: env_text("ESS_SERVICE_SETTINGS")
                 .unwrap_or_else(|| "com.victronenergy.settings".to_owned()),
             system_service: env_text("ESS_SERVICE_SYSTEM")
@@ -866,6 +868,131 @@ impl RuntimeConfig {
             "ESS_LOOP_INTERVAL_SECONDS must not exceed ESS_FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS",
         )?;
         Ok(config)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatteryCurrentConfig {
+    pub enabled: bool,
+    pub mode: BatteryCurrentMode,
+    pub max_charge_current_a: f64,
+    pub max_discharge_current_a: f64,
+    pub interval: Duration,
+    pub headroom_a: f64,
+    pub inverter_efficiency: f64,
+    pub power_step_w: f64,
+    pub increase_interval: Duration,
+}
+
+impl Default for BatteryCurrentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: BatteryCurrentMode::Both,
+            max_charge_current_a: 75.0,
+            max_discharge_current_a: 75.0,
+            interval: Duration::from_secs(5),
+            headroom_a: 2.0,
+            inverter_efficiency: 0.9,
+            power_step_w: 50.0,
+            increase_interval: Duration::from_secs(30),
+        }
+    }
+}
+
+impl BatteryCurrentConfig {
+    #[must_use]
+    pub const fn discharge_enabled(&self) -> bool {
+        self.enabled && !matches!(self.mode, BatteryCurrentMode::Charge)
+    }
+
+    #[must_use]
+    pub const fn charge_enabled(&self) -> bool {
+        self.enabled && !matches!(self.mode, BatteryCurrentMode::Discharge)
+    }
+
+    fn from_env() -> Result<Self, ConfigError> {
+        let defaults = Self::default();
+        let config = Self {
+            enabled: env_flag("ESS_BATTERY_CURRENT_LIMIT_ENABLED")?,
+            mode: match env::var("ESS_BATTERY_CURRENT_LIMIT_MODE") {
+                Ok(value) => BatteryCurrentMode::parse(&value)?,
+                Err(env::VarError::NotPresent) => BatteryCurrentMode::Both,
+                Err(_) => {
+                    return Err(ConfigError(
+                        "ESS_BATTERY_CURRENT_LIMIT_MODE must contain valid text".to_owned(),
+                    ));
+                }
+            },
+            max_charge_current_a: configured_env_f64(
+                "ESS_BATTERY_CHARGE_MAX_CURRENT_A",
+                defaults.max_charge_current_a,
+                1.0,
+                10_000.0,
+            )?
+            .floor(),
+            max_discharge_current_a: configured_env_f64(
+                "ESS_BATTERY_DISCHARGE_MAX_CURRENT_A",
+                defaults.max_discharge_current_a,
+                1.0,
+                10_000.0,
+            )?,
+            interval: configured_env_duration(
+                "ESS_BATTERY_CURRENT_INTERVAL_SECONDS",
+                5.0,
+                2.0,
+                10.0,
+            )?,
+            headroom_a: configured_env_f64(
+                "ESS_BATTERY_DISCHARGE_HEADROOM_A",
+                defaults.headroom_a,
+                0.0,
+                100.0,
+            )?,
+            inverter_efficiency: configured_env_f64(
+                "ESS_BATTERY_DISCHARGE_EFFICIENCY",
+                defaults.inverter_efficiency,
+                0.5,
+                1.0,
+            )?,
+            power_step_w: configured_env_f64(
+                "ESS_BATTERY_DISCHARGE_POWER_STEP_W",
+                defaults.power_step_w,
+                1.0,
+                500.0,
+            )?,
+            increase_interval: configured_env_duration(
+                "ESS_BATTERY_DISCHARGE_INCREASE_INTERVAL_SECONDS",
+                30.0,
+                10.0,
+                300.0,
+            )?,
+        };
+        require(
+            config.headroom_a < config.max_discharge_current_a,
+            "ESS_BATTERY_DISCHARGE_HEADROOM_A must be below the current limit",
+        )?;
+        Ok(config)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatteryCurrentMode {
+    Charge,
+    Discharge,
+    Both,
+}
+
+impl BatteryCurrentMode {
+    fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "charge" => Ok(Self::Charge),
+            "discharge" => Ok(Self::Discharge),
+            "both" => Ok(Self::Both),
+            _ => Err(ConfigError(
+                "ESS_BATTERY_CURRENT_LIMIT_MODE must be charge, discharge or both".to_owned(),
+            )),
+        }
     }
 }
 

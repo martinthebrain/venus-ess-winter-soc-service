@@ -84,6 +84,7 @@ pub const fn set_explicit_inhibit_requested(
 }
 
 pub const fn clear_requests(state: &mut ChargeCurrentControlState) {
+    state.battery_constraint_a = None;
     state.configured_constraint_a = None;
     state.reserve_constraint_a = None;
     state.routine_ceiling_requested = false;
@@ -96,7 +97,10 @@ pub const fn effective_constraint(state: &ChargeCurrentControlState) -> Option<f
     if state.routine_ceiling_requested || state.explicit_inhibit_requested {
         return Some(DISABLED_CHARGE_CURRENT_A);
     }
-    stricter_constraint(state.configured_constraint_a, state.reserve_constraint_a)
+    stricter_constraint(
+        stricter_constraint(state.configured_constraint_a, state.reserve_constraint_a),
+        state.battery_constraint_a,
+    )
 }
 
 #[must_use]

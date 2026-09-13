@@ -1,5 +1,6 @@
 //! Stateful controller that applies the pure policy through typed boundaries.
 
+use crate::battery_current::{BatteryCurrentStatus, CurrentFeedback, CurrentSample};
 use crate::charge_ceiling::{ChargeCeilingEvaluation, evaluate as evaluate_charge_ceiling};
 use crate::charge_current_control::{
     ChargeCurrentAction, PendingWriteResolution as ChargeCurrentPendingWriteResolution,
@@ -23,8 +24,8 @@ use crate::config::{
 use crate::discharge_protection::{
     PendingWriteResolution as DischargePendingWriteResolution, ProtectionAction,
     ProtectionEvaluation, ProtectionInput, cancel_unapplied_action, commit_action,
-    discard_pending_write, evaluate as evaluate_discharge_protection, normalized_setting,
-    pending_retry_is_required, prepare_action as prepare_discharge_action,
+    discard_pending_write, evaluate_current_limited as evaluate_discharge_protection,
+    normalized_setting, pending_retry_is_required, prepare_action as prepare_discharge_action,
     reconcile_pending_write as reconcile_pending_discharge_write,
     release_ownership as release_discharge_ownership, setting_available,
 };
@@ -73,6 +74,7 @@ enum CurrentReason {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChargeCurrentRequestOrigin {
+    BatteryCurrent,
     RoutineCeiling,
     Reserve,
     Shutdown,
@@ -230,6 +232,8 @@ where
     requested_max_charge_current: Option<f64>,
     requested_charge_ceiling_current_a: Option<f64>,
     requested_max_discharge_power: Option<f64>,
+    discharge_feedback: CurrentFeedback,
+    discharge_limit_status: BatteryCurrentStatus,
     charge_current_ceiling_active: bool,
     charge_current_ceiling_unenforced_reason: Option<ChargeCurrentCeilingUnavailableReason>,
     last_charge_current_ceiling_unenforced_log:
@@ -257,7 +261,7 @@ where
     L: LogSink,
 {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         dbus: P,
         store: S,
         clock: C,
@@ -277,6 +281,8 @@ where
             requested_max_charge_current: None,
             requested_charge_ceiling_current_a: None,
             requested_max_discharge_power: None,
+            discharge_feedback: CurrentFeedback::default(),
+            discharge_limit_status: BatteryCurrentStatus::default(),
             charge_current_ceiling_active: false,
             charge_current_ceiling_unenforced_reason: None,
             last_charge_current_ceiling_unenforced_log: None,
@@ -395,6 +401,7 @@ where
             now,
             now_ts,
         );
+        self.apply_battery_charge_limit(now, now_ts);
         let outcome = if self.wrote_setting {
             CycleOutcome::Applied
         } else {
@@ -605,6 +612,12 @@ where
                 }
             }
             DischargePendingWriteResolution::Retry(ProtectionAction::Restrict(_)) => {
+                if self.state.discharge_protection.current_limit_managed
+                    && self.state.discharge_protection.last_set_power_w.is_some()
+                {
+                    discard_pending_write(&mut self.state.discharge_protection);
+                    return None;
+                }
                 release_discharge_ownership(&mut self.state.discharge_protection);
                 self.logger
                     .log("Cleanup discarded an unapplied MaxDischargePower restriction");
@@ -743,6 +756,7 @@ where
             requested_max_charge_current: self.requested_max_charge_current,
             requested_charge_ceiling_current_a: self.requested_charge_ceiling_current_a,
             requested_max_discharge_power: self.requested_max_discharge_power,
+            battery_current_limit: self.battery_current_status(),
             charge_current_ceiling_active: self.charge_current_ceiling_active,
             charge_current_ceiling_owned: self.state.charge_current_control.owned
                 && self.state.charge_current_control.routine_ceiling_requested,
@@ -752,7 +766,9 @@ where
             charge_current_ceiling_unenforced_reason: self
                 .charge_current_ceiling_unenforced_reason
                 .map(|reason| reason.label().to_owned()),
-            discharge_protection_active: self.state.discharge_protection.active,
+            discharge_protection_active: self.state.discharge_protection.active
+                && (!self.state.discharge_protection.current_limit_managed
+                    || self.state.discharge_protection.low_soc_latched),
             discharge_protection_pending_unenforced: self
                 .discharge_protection_unenforced_reason
                 .is_some(),
@@ -859,6 +875,13 @@ where
         now: LocalDateTime,
         now_ts: f64,
     ) -> Result<(), ChargeCurrentControlFailure> {
+        if !matches!(origin, ChargeCurrentRequestOrigin::Shutdown) {
+            self.state.charge_current_control.battery_constraint_a = self
+                .config
+                .battery_current
+                .charge_enabled()
+                .then_some(self.config.battery_current.max_charge_current_a);
+        }
         if self.state.charge_current_control.pending_write.is_some()
             && !self.store.flush(Duration::from_secs(5))
         {
@@ -1081,7 +1104,7 @@ where
             ChargeCurrentRequestOrigin::RoutineCeiling => {
                 self.requested_charge_ceiling_current_a = Some(intended_a);
             }
-            ChargeCurrentRequestOrigin::Reserve => {
+            ChargeCurrentRequestOrigin::Reserve | ChargeCurrentRequestOrigin::BatteryCurrent => {
                 self.requested_max_charge_current = Some(intended_a);
             }
             ChargeCurrentRequestOrigin::Shutdown => {}
@@ -1259,6 +1282,115 @@ where
         }
     }
 
+    /// Run only the enabled current regulators between full seasonal cycles.
+    pub fn run_battery_current_once(&mut self) -> BatteryCurrentStatus {
+        if !self.config.battery_current.enabled {
+            return BatteryCurrentStatus::default();
+        }
+        self.begin_cycle();
+        let now = self.clock.local_date_time();
+        let now_ts = self.clock.monotonic_seconds();
+        let soc = self.read_current_soc(now_ts).unwrap_or(f64::NAN);
+        let power = self.raw(&self.config.system_service.clone(), BATTERY_POWER_PATH);
+        self.apply_discharge_protection(soc, power, now, now_ts);
+        let minimum = self.raw(&self.config.settings_service.clone(), MIN_SOC_PATH);
+        if soc.is_finite() && minimum.is_some_and(|value| (0.0..=100.0).contains(&value)) {
+            self.apply_battery_charge_limit(now, now_ts);
+        } else if self.config.battery_current.charge_enabled() {
+            self.discharge_limit_status.charge_unenforced_reason =
+                Some("soc_telemetry_unavailable".to_owned());
+        }
+        self.battery_current_status()
+    }
+
+    fn apply_battery_charge_limit(&mut self, now: LocalDateTime, now_ts: f64) {
+        if !self.config.battery_current.charge_enabled()
+            && self
+                .state
+                .charge_current_control
+                .battery_constraint_a
+                .is_none()
+        {
+            return;
+        }
+        self.discharge_limit_status.charge_unenforced_reason = self
+            .actuate_charge_current(ChargeCurrentRequestOrigin::BatteryCurrent, now, now_ts)
+            .err()
+            .map(|error| format!("{error:?}"));
+        if self.config.battery_current.charge_enabled()
+            && self
+                .discharge_limit_status
+                .charge_unenforced_reason
+                .is_none()
+        {
+            self.discharge_limit_status.charge_unenforced_reason =
+                self.battery_charge_capability_issue();
+        }
+    }
+
+    fn battery_charge_capability_issue(&mut self) -> Option<String> {
+        let settings = self.config.settings_service.clone();
+        let dvcc = self.raw(&settings, "/Settings/Services/Bol");
+        let feed_in = self.raw(&settings, "/Settings/CGwacs/OvervoltageFeedIn");
+        if !dvcc.is_some_and(|value| {
+            value.to_bits() == 1.0_f64.to_bits() || value.to_bits() == 3.0_f64.to_bits()
+        }) {
+            Some("dvcc_not_enabled_or_unknown".to_owned())
+        } else if feed_in.is_none_or(|value| value.to_bits() != 0.0_f64.to_bits()) {
+            Some("dc_pv_feed_in_enabled_or_unknown_bypasses_dvcc_limit".to_owned())
+        } else {
+            None
+        }
+    }
+
+    fn battery_current_status(&self) -> BatteryCurrentStatus {
+        let mut status = self.discharge_limit_status.clone();
+        status.generated_at = self.clock.epoch_seconds();
+        status.enabled = self.config.battery_current.enabled;
+        status.discharge_enabled = self.config.battery_current.discharge_enabled();
+        status.charge_enabled = self.config.battery_current.charge_enabled();
+        status.configured_charge_current_a = status
+            .charge_enabled
+            .then_some(self.config.battery_current.max_charge_current_a);
+        status.applied_charge_current_a =
+            self.state.charge_current_control.last_effectively_written_a;
+        status.applied_power_w = self.state.discharge_protection.last_set_power_w;
+        status.unenforced_reason = self
+            .discharge_protection_unenforced_reason
+            .map(|reason| reason.label().to_owned());
+        status
+    }
+
+    fn refresh_discharge_current_constraint(&mut self, now: LocalDateTime, now_ts: f64) {
+        if !self.config.battery_current.discharge_enabled() {
+            self.discharge_limit_status = BatteryCurrentStatus::default();
+            self.discharge_feedback = CurrentFeedback::default();
+            return;
+        }
+        let system = self.config.system_service.clone();
+        let voltage_v = self.raw(&system, BATTERY_VOLTAGE_PATH);
+        let battery_current_a = self.raw(&system, "/Dc/Battery/Current");
+        let dc_pv_w = self.raw(&system, DC_PV_POWER_PATH);
+        let bms_limit_a = self
+            .active_bms_service(now)
+            .and_then(|service| self.raw(&service, "/Info/MaxDischargeCurrent"));
+        let grid_connected = self
+            .active_vebus_service(now)
+            .and_then(|service| self.optional_binary_state(&service, "/Ac/ActiveIn/Connected"));
+        self.discharge_limit_status = self.discharge_feedback.evaluate(
+            &self.config.battery_current,
+            CurrentSample {
+                voltage_v,
+                battery_current_a,
+                dc_pv_w,
+                bms_limit_a,
+                grid_connected,
+                monotonic_now: now_ts,
+            },
+        );
+        self.discharge_limit_status.generated_at = self.clock.epoch_seconds();
+    }
+
     fn apply_discharge_protection(
         &mut self,
         current_soc: f64,
@@ -1268,9 +1400,13 @@ where
     ) {
         let entering = current_soc < self.config.policy.discharge_protection_enter_soc
             && battery_power_w.is_some_and(|power| power < 0.0);
-        if !self.state.discharge_protection.active && !entering {
+        if !self.state.discharge_protection.active
+            && !entering
+            && !self.config.battery_current.discharge_enabled()
+        {
             return;
         }
+        self.refresh_discharge_current_constraint(now, now_ts);
         let current_limit_w = self.raw(
             &self.config.settings_service.clone(),
             MAX_DISCHARGE_POWER_PATH,
@@ -1311,6 +1447,7 @@ where
                 nominal_inverter_power_w,
                 monotonic_now: now_ts,
             },
+            self.discharge_limit_status.power_constraint_w,
         );
         let mut force_persist = self.observe_discharge_events(&evaluation);
         self.observe_discharge_telemetry(
@@ -1336,6 +1473,9 @@ where
             false
         };
         if evaluation.state_changed || action_committed || nominal_binding_changed {
+            if self.state.discharge_protection.current_limit_managed && evaluation.state_changed {
+                force_persist = true;
+            }
             self.save_state(now, force_persist);
         }
     }
@@ -1359,6 +1499,7 @@ where
                 nominal_inverter_power_w,
                 monotonic_now: now_ts,
             },
+            self.discharge_limit_status.power_constraint_w,
         );
         let Some(action) = evaluation.action else {
             return;
@@ -1485,7 +1626,7 @@ where
         commit_action(&mut self.state.discharge_protection, action);
         match action {
             ProtectionAction::Restrict(power) => self.logger.log(&format!(
-                "MaxDischargePower -> {power:.0}W (low-SoC protection)"
+                "MaxDischargePower -> {power:.0}W (discharge constraints)"
             )),
             ProtectionAction::Restore(power) => self.logger.log(&format!(
                 "MaxDischargePower -> {power:.0}W (protection released)"
@@ -1575,6 +1716,12 @@ where
                 false
             }
             DischargePendingWriteResolution::Retry(action) => {
+                if self.state.discharge_protection.current_limit_managed {
+                    discard_pending_write(&mut self.state.discharge_protection);
+                    // Recompute from this cycle, never replay an old PV allowance.
+                    self.save_state(now, true);
+                    return false;
+                }
                 if !pending_retry_is_required(
                     &self.config.policy,
                     &self.state.discharge_protection,
@@ -1815,6 +1962,7 @@ where
         let selected = selected_service(value, "com.victronenergy.vebus");
         self.cycle_topology.vebus_service = ServiceResolution::Resolved(selected.clone());
         if selected != self.state.vebus_service {
+            self.discharge_feedback = CurrentFeedback::default();
             self.state.vebus_service.clone_from(&selected);
             self.state.nominal_inverter_power_last = None;
             self.state.nominal_inverter_power_service = None;
@@ -2600,6 +2748,7 @@ where
         };
         self.cycle_topology.bms_service = ServiceResolution::Resolved(selected.clone());
         if selected != self.state.battery_service {
+            self.discharge_feedback = CurrentFeedback::default();
             self.state.battery_service.clone_from(&selected);
             self.state.battery_max_current_last = None;
             self.state.battery_max_current_last_seen_ts = 0.0;
@@ -2924,6 +3073,7 @@ const fn charge_current_action_label(action: ChargeCurrentAction) -> &'static st
 
 const fn charge_current_origin_label(origin: ChargeCurrentRequestOrigin) -> &'static str {
     match origin {
+        ChargeCurrentRequestOrigin::BatteryCurrent => "battery current limit",
         ChargeCurrentRequestOrigin::RoutineCeiling => "routine SoC ceiling",
         ChargeCurrentRequestOrigin::Reserve => "reserve charge-current control",
         ChargeCurrentRequestOrigin::Shutdown => "shutdown restore",

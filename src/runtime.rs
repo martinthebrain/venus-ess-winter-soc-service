@@ -34,6 +34,10 @@ pub fn run(config: RuntimeConfig) -> Result<(), Box<dyn Error>> {
     let decision_file = config.decision_file.clone();
     let one_shot = config.one_shot;
     let interval = config.loop_interval;
+    let discharge_interval = config
+        .battery_current
+        .enabled
+        .then_some(config.battery_current.interval);
     let mut context = initialize(config)?;
     let controller = &mut context.controller;
     controller.log_startup();
@@ -44,23 +48,46 @@ pub fn run(config: RuntimeConfig) -> Result<(), Box<dyn Error>> {
 
     loop {
         let started = Instant::now();
-        let decision = controller.run_once();
-        if let Some(path) = &decision_file {
-            let encoded = serde_json::to_vec(&decision)?;
-            if let Err(error) = atomic_write(path, &encoded, false) {
-                eprintln!("venus-ess-winter-soc-service: decision snapshot failed: {error}");
-            }
-        }
+        let mut decision = controller.run_once();
+        write_decision(decision_file.as_deref(), &decision)?;
         if one_shot || terminating.load(Ordering::Acquire) {
             break;
         }
-        let remaining = interval.saturating_sub(started.elapsed());
-        sleep_interruptibly(remaining, &terminating);
+        loop {
+            let remaining = interval.saturating_sub(started.elapsed());
+            if remaining.is_zero() || terminating.load(Ordering::Acquire) {
+                break;
+            }
+            sleep_interruptibly(
+                discharge_interval.map_or(remaining, |fast| fast.min(remaining)),
+                &terminating,
+            );
+            if terminating.load(Ordering::Acquire) || started.elapsed() >= interval {
+                break;
+            }
+            if discharge_interval.is_some() {
+                decision.battery_current_limit = controller.run_battery_current_once();
+                write_decision(decision_file.as_deref(), &decision)?;
+            }
+        }
         if terminating.load(Ordering::Acquire) {
             break;
         }
     }
     controller.shutdown();
+    Ok(())
+}
+
+fn write_decision(
+    path: Option<&std::path::Path>,
+    decision: &crate::domain::CycleDecision,
+) -> Result<(), serde_json::Error> {
+    if let Some(path) = path {
+        let encoded = serde_json::to_vec(decision)?;
+        if let Err(error) = atomic_write(path, &encoded, false) {
+            eprintln!("venus-ess-winter-soc-service: decision snapshot failed: {error}");
+        }
+    }
     Ok(())
 }
 

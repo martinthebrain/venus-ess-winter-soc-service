@@ -210,6 +210,8 @@ impl ChargeCurrentCeilingState {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ChargeCurrentControlState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_constraint_a: Option<f64>,
     pub external_baseline_a: Option<f64>,
     pub configured_constraint_a: Option<f64>,
     pub reserve_constraint_a: Option<f64>,
@@ -252,10 +254,15 @@ pub struct PendingReserveChargeCurrentWrite {
     pub intended_a: f64,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct DischargeProtectionState {
     pub active: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub current_limit_managed: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub low_soc_latched: bool,
     pub recharge_seen: bool,
     #[serde(skip)]
     pub recharge_candidate_since_ts: Option<f64>,
@@ -360,6 +367,7 @@ impl ControllerState {
             || self.charge_current_owned_by_script
             || selected_pending.is_some();
         let mut control = ChargeCurrentControlState {
+            battery_constraint_a: None,
             external_baseline_a,
             configured_constraint_a: None,
             reserve_constraint_a,
@@ -553,6 +561,7 @@ const fn is_zero_u64(value: &u64) -> bool {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct CycleDecision {
+    pub battery_current_limit: crate::battery_current::BatteryCurrentStatus,
     pub generated_at: f64,
     pub mode: String,
     pub target_soc: f64,

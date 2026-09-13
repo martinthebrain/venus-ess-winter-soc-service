@@ -140,6 +140,7 @@ proptest! {
             last_observed_power_w: Some(cap),
             write_generation: 0,
             pending_write: None,
+            ..DischargeProtectionState::default()
         };
         let result = evaluate_discharge_protection(
             &policy,

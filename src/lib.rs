@@ -1,5 +1,6 @@
 //! Seasonal ESS reserve control for Victron Venus OS.
 
+pub mod battery_current;
 pub mod charge_ceiling;
 pub mod charge_current_control;
 pub mod clock;

@@ -51,6 +51,38 @@ by limiting ESS discharge power to 40% of the discovered nominal VE.Bus power.
 It preserves stricter GUI limits and restores the previous limit only after
 charging has been observed and SoC exceeds 25%.
 
+Optional battery current limiting is disabled by default. In `config.env` set
+`ESS_BATTERY_CURRENT_LIMIT_ENABLED=1` and choose
+`ESS_BATTERY_CURRENT_LIMIT_MODE=charge`, `discharge`, or `both`.
+`ESS_BATTERY_CHARGE_MAX_CURRENT_A` and
+`ESS_BATTERY_DISCHARGE_MAX_CURRENT_A` set the separate total-bank limits;
+both default to 75 A. Restart the service after changing configuration.
+
+Charging uses the existing single-owner DVCC arbiter. Lower GUI, reserve,
+routine-SoC and BMS limits retain priority. **DC-PV excess feed-in bypasses
+DVCC's MPPT current limiting** on VE.Bus ESS systems, so the charging limit
+cannot be guaranteed with that option enabled or with uncontrolled chargers.
+The service reports this incompatibility; it never changes feed-in settings.
+
+Discharging combines measured battery voltage, DC-PV power, current feedback
+and a configurable conversion margin into `MaxDischargePower`. AC-PV is not
+added to this allowance. The tighter low-SoC or external limit always wins.
+Missing DC-PV gives no PV allowance; missing battery voltage/current/BMS DCL
+requests zero inverter power, provided the actuator and nominal rating are
+available. The five-second lightweight loop leaves the seasonal loop at its
+normal cadence. Power is quantized down in 50 W steps and increases wait
+30 seconds; decreases do not wait for that interval.
+
+These are operating limits, **not instantaneous hardware protection**.
+Measurement delay and ESS response can cause short current excursions.
+`MaxDischargePower` does not enforce the limit during island operation, and
+cannot limit independent DC consumers. BMS protection remains essential.
+Decisions expose `battery_current_limit`, including unsupported operation and
+unconfirmed writes. Disabling a constraint restores only still-owned settings.
+Every changed setting retains write-ahead persistence and readback; unchanged
+limits are not rewritten. Dynamic discharge regulation consequently causes
+more setting/journal writes than the seasonal policy alone.
+
 Winter balancing separates the approach to full charge from the high-SoC hold.
 The approach may span up to 72 hours by default and therefore several scheduled
 charging windows. Reaching 99% starts an independent twelve-hour watchdog; four

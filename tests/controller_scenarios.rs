@@ -632,6 +632,7 @@ impl LogSink for FakeLog {
 
 fn config(shadow: bool) -> RuntimeConfig {
     RuntimeConfig {
+        battery_current: venus_ess_winter_soc_service::config::BatteryCurrentConfig::default(),
         settings_service: "settings".to_owned(),
         system_service: "system".to_owned(),
         fallback_battery_service: None,
@@ -4163,6 +4164,346 @@ fn low_soc_discharge_is_limited_to_40_percent_of_nominal_power() {
     assert!(bus.writes().iter().any(|(_, path, value)| {
         path == MAX_DISCHARGE_POWER_PATH && value.to_bits() == 1_000.0_f64.to_bits()
     }));
+}
+
+fn current_limit_bus() -> FakeDbus {
+    let bus = base_bus();
+    configure_nominal_inverter_power(&bus, 10_000.0);
+    bus.value("system", BATTERY_VOLTAGE_PATH, 50.0);
+    bus.value("system", "/Dc/Battery/Current", -20.0);
+    bus.value("system", BATTERY_POWER_PATH, -1_000.0);
+    bus.value("system", DC_PV_POWER_PATH, 0.0);
+    bus.value(ACTIVE_BMS_SERVICE, "/Info/MaxDischargeCurrent", 200.0);
+    bus.value(VEBUS_SERVICE, "/Ac/ActiveIn/Connected", 1.0);
+    bus.value("settings", "/Settings/Services/Bol", 3.0);
+    bus.value("settings", "/Settings/CGwacs/OvervoltageFeedIn", 0.0);
+    bus
+}
+
+#[test]
+fn charge_limit_reports_dc_feed_in_bypass_without_changing_it() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    bus.value("settings", "/Settings/CGwacs/OvervoltageFeedIn", 1.0);
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Both),
+        ControllerState::default(),
+    );
+    let status = controller.run_battery_current_once();
+    assert_eq!(
+        status.charge_unenforced_reason.as_deref(),
+        Some("dc_pv_feed_in_enabled_or_unknown_bypasses_dvcc_limit")
+    );
+    assert!(
+        !bus.writes()
+            .iter()
+            .any(|(_, path, _)| path.contains("OvervoltageFeedIn"))
+    );
+}
+
+#[test]
+fn current_charge_pending_write_restores_after_crash_and_disabling() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    for effect in [ScriptEffect::CrashBefore, ScriptEffect::CrashAfter] {
+        let bus = current_limit_bus();
+        bus.script([ScriptStep::new(
+            FakeDbusOperation::WriteInteger,
+            "settings",
+            MAX_CHARGE_CURRENT_PATH,
+            effect,
+        )]);
+        let store = FakeStore::default();
+        let mut controller = Controller::new(
+            bus.clone(),
+            store.clone(),
+            clock(7, 1, 12, 1_000.0),
+            FakeLog::default(),
+            current_limit_config(BatteryCurrentMode::Charge),
+            ControllerState::default(),
+        );
+        assert!(catch_unwind(AssertUnwindSafe(|| controller.run_battery_current_once())).is_err());
+        bus.assert_script_complete();
+        let durable = store.latest_state();
+        assert!(durable.charge_current_control.pending_write.is_some());
+        let mut restarted = Controller::new(
+            bus.clone(),
+            store,
+            clock(7, 1, 12, 1_010.0),
+            FakeLog::default(),
+            config(false),
+            durable,
+        );
+        restarted.run_once();
+        assert_eq!(bus.number("settings", MAX_CHARGE_CURRENT_PATH), Some(-1.0));
+        assert!(!restarted.state.charge_current_control.owned);
+    }
+}
+
+#[test]
+fn administrative_cleanup_restores_baseline_with_a_later_unapplied_dynamic_write() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Discharge),
+        ControllerState::default(),
+    );
+    controller.run_battery_current_once();
+    bus.ignore_next_discharge_power_write();
+    bus.value("system", "/Dc/Battery/Current", -100.0);
+    controller.run_battery_current_once();
+    assert!(
+        controller
+            .state
+            .discharge_protection
+            .pending_write
+            .is_some()
+    );
+    assert!(controller.restore_all_owned_settings().is_ok());
+    assert_eq!(bus.number("settings", MAX_DISCHARGE_POWER_PATH), Some(-1.0));
+}
+
+fn current_limit_config(
+    mode: venus_ess_winter_soc_service::config::BatteryCurrentMode,
+) -> RuntimeConfig {
+    let mut config = config(false);
+    config.battery_current.enabled = true;
+    config.battery_current.mode = mode;
+    config
+}
+
+#[test]
+fn battery_current_modes_only_write_the_selected_actor() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    for mode in [
+        BatteryCurrentMode::Charge,
+        BatteryCurrentMode::Discharge,
+        BatteryCurrentMode::Both,
+    ] {
+        let bus = current_limit_bus();
+        let mut controller = Controller::new(
+            bus.clone(),
+            FakeStore::default(),
+            clock(7, 1, 12, 1_000.0),
+            FakeLog::default(),
+            current_limit_config(mode),
+            ControllerState::default(),
+        );
+        let decision = controller.run_battery_current_once();
+        assert_eq!(
+            bus.number("settings", MAX_CHARGE_CURRENT_PATH),
+            Some(if mode == BatteryCurrentMode::Discharge {
+                -1.0
+            } else {
+                75.0
+            })
+        );
+        assert_eq!(
+            bus.number("settings", MAX_DISCHARGE_POWER_PATH),
+            Some(if mode == BatteryCurrentMode::Charge {
+                -1.0
+            } else {
+                3250.0
+            })
+        );
+        assert_eq!(
+            decision.charge_enabled,
+            mode != BatteryCurrentMode::Discharge
+        );
+        assert_eq!(
+            decision.discharge_enabled,
+            mode != BatteryCurrentMode::Charge
+        );
+    }
+}
+
+#[test]
+fn both_current_limits_keep_stricter_gui_limits_and_full_cycle_cannot_clear_charge_limit() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    bus.value("settings", MAX_DISCHARGE_POWER_PATH, 1_500.0);
+    bus.value("settings", MAX_CHARGE_CURRENT_PATH, 40.0);
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Both),
+        ControllerState::default(),
+    );
+    controller.run_once();
+    controller.run_battery_current_once();
+    assert_eq!(
+        bus.number("settings", MAX_DISCHARGE_POWER_PATH),
+        Some(1500.0)
+    );
+    assert_eq!(bus.number("settings", MAX_CHARGE_CURRENT_PATH), Some(40.0));
+}
+
+#[test]
+fn disabling_current_limits_restores_originals_after_restart() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Both),
+        ControllerState::default(),
+    );
+    controller.run_battery_current_once();
+    let mut restarted = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_010.0),
+        FakeLog::default(),
+        config(false),
+        controller.state,
+    );
+    restarted.run_once();
+    assert_eq!(bus.number("settings", MAX_DISCHARGE_POWER_PATH), Some(-1.0));
+    assert_eq!(bus.number("settings", MAX_CHARGE_CURRENT_PATH), Some(-1.0));
+    assert!(!restarted.state.discharge_protection.active);
+    assert!(!restarted.state.charge_current_control.owned);
+}
+
+#[test]
+fn disabling_does_not_overwrite_later_external_settings() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Both),
+        ControllerState::default(),
+    );
+    controller.run_battery_current_once();
+    bus.value("settings", MAX_CHARGE_CURRENT_PATH, 5.0);
+    bus.value("settings", MAX_DISCHARGE_POWER_PATH, 500.0);
+    let mut restarted = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_010.0),
+        FakeLog::default(),
+        config(false),
+        controller.state,
+    );
+    restarted.run_once();
+    assert_eq!(
+        bus.number("settings", MAX_DISCHARGE_POWER_PATH),
+        Some(500.0)
+    );
+    assert_eq!(bus.number("settings", MAX_CHARGE_CURRENT_PATH), Some(5.0));
+}
+
+#[test]
+fn discharge_current_pending_write_is_recomputed_after_pv_loss() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    for effect in [ScriptEffect::CrashBefore, ScriptEffect::CrashAfter] {
+        let bus = current_limit_bus();
+        bus.value("system", DC_PV_POWER_PATH, 3000.0);
+        bus.script([ScriptStep::new(
+            FakeDbusOperation::WriteFloat,
+            "settings",
+            MAX_DISCHARGE_POWER_PATH,
+            effect,
+        )]);
+        let store = FakeStore::default();
+        let cfg = current_limit_config(BatteryCurrentMode::Discharge);
+        let mut controller = Controller::new(
+            bus.clone(),
+            store.clone(),
+            clock(7, 1, 12, 1_000.0),
+            FakeLog::default(),
+            cfg.clone(),
+            ControllerState::default(),
+        );
+        assert!(catch_unwind(AssertUnwindSafe(|| controller.run_battery_current_once())).is_err());
+        bus.assert_script_complete();
+        let durable = store.latest_state();
+        assert!(durable.discharge_protection.pending_write.is_some());
+        bus.value("system", DC_PV_POWER_PATH, 0.0);
+        let mut restarted = Controller::new(
+            bus.clone(),
+            store,
+            clock(7, 1, 12, 1_010.0),
+            FakeLog::default(),
+            cfg,
+            durable,
+        );
+        restarted.run_battery_current_once();
+        assert_eq!(
+            bus.number("settings", MAX_DISCHARGE_POWER_PATH),
+            Some(3250.0)
+        );
+        assert!(restarted.state.discharge_protection.restore_default);
+        assert_eq!(restarted.state.discharge_protection.pending_write, None);
+    }
+}
+
+#[test]
+fn current_limit_fast_cycle_honors_shadow_and_low_soc_constraint() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    configure_nominal_inverter_power(&bus, 5_000.0);
+    bus.value("system", BATTERY_SOC_PATH, 19.0);
+    let mut cfg = current_limit_config(BatteryCurrentMode::Both);
+    cfg.shadow = true;
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        cfg,
+        ControllerState::default(),
+    );
+    controller.run_battery_current_once();
+    controller.shutdown();
+    assert!(bus.writes().is_empty());
+    let mut active = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Both),
+        ControllerState::default(),
+    );
+    active.run_battery_current_once();
+    assert_eq!(
+        bus.number("settings", MAX_DISCHARGE_POWER_PATH),
+        Some(2000.0)
+    );
+    assert!(active.state.discharge_protection.low_soc_latched);
+}
+
+#[test]
+fn unchanged_current_limit_samples_do_not_write_again() {
+    use venus_ess_winter_soc_service::config::BatteryCurrentMode;
+    let bus = current_limit_bus();
+    let mut controller = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1_000.0),
+        FakeLog::default(),
+        current_limit_config(BatteryCurrentMode::Both),
+        ControllerState::default(),
+    );
+    controller.run_battery_current_once();
+    let writes = bus.writes().len();
+    for _ in 0..20 {
+        controller.run_battery_current_once();
+    }
+    assert_eq!(bus.writes().len(), writes);
 }
 
 #[test]
