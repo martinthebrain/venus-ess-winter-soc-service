@@ -316,6 +316,20 @@ impl FakeDbus {
 }
 
 impl DbusPort for FakeDbus {
+    fn service_owner(&mut self, service: &str) -> Result<String, PortError> {
+        self.text(service, "test-owner")?
+            .ok_or_else(|| PortError::new("owner", "no owner"))
+    }
+
+    fn clear_value(&mut self, service: &str, path: &str) -> Result<(), PortError> {
+        self.write_float(service, path, 0.0)?;
+        self.shared
+            .lock()
+            .map_err(|_| PortError::new("clear", "lock"))?
+            .values
+            .remove(&(service.to_owned(), path.to_owned()));
+        Ok(())
+    }
     fn begin_cycle(&mut self) {
         if let Ok(mut state) = self.shared.lock() {
             state.cycle_fault = None;
@@ -573,6 +587,15 @@ impl FakeStore {
 }
 
 impl StatePort for FakeStore {
+    fn save_volatile(&mut self, state: &ControllerState) -> Result<(), String> {
+        if let Ok(mut shared) = self.shared.lock() {
+            if shared.fail_forced_save {
+                return Err("RAM journal failed".to_owned());
+            }
+            shared.saved_states.push(state.clone());
+        }
+        Ok(())
+    }
     fn refresh_window(
         &mut self,
         _state: &mut ControllerState,
@@ -4181,10 +4204,12 @@ fn current_limit_bus() -> FakeDbus {
 }
 
 #[test]
-fn charge_limit_reports_dc_feed_in_bypass_without_changing_it() {
+fn charge_limit_reports_unavailable_export_control_without_changing_feed_in() {
     use venus_ess_winter_soc_service::config::BatteryCurrentMode;
     let bus = current_limit_bus();
     bus.value("settings", "/Settings/CGwacs/OvervoltageFeedIn", 1.0);
+    bus.value("system", DC_PV_POWER_PATH, 6000.0);
+    bus.value("system", "/Dc/Battery/Current", 100.0);
     let mut controller = Controller::new(
         bus.clone(),
         FakeStore::default(),
@@ -4196,13 +4221,253 @@ fn charge_limit_reports_dc_feed_in_bypass_without_changing_it() {
     let status = controller.run_battery_current_once();
     assert_eq!(
         status.charge_unenforced_reason.as_deref(),
-        Some("dc_pv_feed_in_enabled_or_unknown_bypasses_dvcc_limit")
+        Some("conflicting_or_unknown_ess_control")
     );
     assert!(
         !bus.writes()
             .iter()
             .any(|(_, path, _)| path.contains("OvervoltageFeedIn"))
     );
+}
+
+const EXPORT_OWNER: &str = ":1.123";
+const EXPORT_PATH: &str = "/Overrides/Setpoint";
+
+fn pv_export_bus() -> FakeDbus {
+    let bus = current_limit_bus();
+    bus.value("system", "/Dc/Battery/Current", 100.0);
+    bus.value("system", BATTERY_POWER_PATH, 5000.0);
+    bus.value("system", DC_PV_POWER_PATH, 6000.0);
+    bus.value("system", "/Ac/Grid/NumberOfPhases", 1.0);
+    bus.value("system", "/Ac/Grid/L1/Power", 0.0);
+    bus.value("system", "/Control/ScheduledCharge", 0.0);
+    bus.value(ACTIVE_BMS_SERVICE, BMS_MAX_CHARGE_CURRENT_PATH, 200.0);
+    bus.value(VEBUS_SERVICE, "/Ac/ActiveIn/ActiveInput", 0.0);
+    for (path, value) in [
+        ("/Settings/CGwacs/OvervoltageFeedIn", 1.0),
+        ("/Settings/CGwacs/AcPowerSetPoint", 50.0),
+        ("/Settings/CGwacs/MaxFeedInPower", -1.0),
+        ("/Settings/DynamicEss/Mode", 0.0),
+        ("/Settings/CGwacs/Hub4Mode", 1.0),
+        ("/Settings/SystemSetup/AcInput1", 1.0),
+    ] {
+        bus.value("settings", path, value);
+    }
+    for path in ["/Overrides/ForceCharge", "/Overrides/FeedInExcess"] {
+        bus.value("com.victronenergy.hub4", path, 0.0);
+    }
+    bus.text_value("com.victronenergy.hub4", "test-owner", EXPORT_OWNER);
+    bus
+}
+
+fn pv_export_controller(
+    bus: &FakeDbus,
+    store: FakeStore,
+    state: ControllerState,
+    shadow: bool,
+) -> Controller<FakeDbus, FakeStore, FixedClock, FakeLog> {
+    let mut cfg =
+        current_limit_config(venus_ess_winter_soc_service::config::BatteryCurrentMode::Both);
+    cfg.shadow = shadow;
+    Controller::new(
+        bus.clone(),
+        store,
+        clock(7, 1, 12, 1000.0),
+        FakeLog::default(),
+        cfg,
+        state,
+    )
+}
+
+#[test]
+fn pv_export_redirects_excess_and_never_changes_feed_in_or_grid_settings() {
+    let bus = pv_export_bus();
+    let mut controller = pv_export_controller(
+        &bus,
+        FakeStore::default(),
+        ControllerState::default(),
+        false,
+    );
+    let status = controller.run_battery_current_once();
+    assert_eq!(status.pv_export_setpoint_w, Some(-1200.0));
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), Some(-1200.0));
+    for (_, path, _) in bus.writes() {
+        assert!(!path.contains("FeedIn"));
+        assert_ne!(path, "/Settings/CGwacs/AcPowerSetPoint");
+        assert!(!path.contains("Link/ChargeCurrent"));
+    }
+    bus.value("system", "/Dc/Battery/Current", 73.5);
+    bus.value("system", "/Ac/Grid/L1/Power", -1200.0);
+    let settled = controller.run_battery_current_once();
+    assert!(settled.charge_unenforced_reason.is_none());
+    assert_eq!(settled.measured_charge_current_a, Some(73.5));
+}
+
+#[test]
+fn pv_export_releases_on_pv_loss_missing_soc_or_foreign_ess_controller() {
+    for (service, path, value) in [
+        ("system", DC_PV_POWER_PATH, 0.0),
+        ("system", BATTERY_SOC_PATH, -1.0),
+        ("system", "/Dc/Battery/Current", -10.0),
+        ("system", "/Control/ScheduledCharge", 1.0),
+        ("settings", "/Settings/DynamicEss/Mode", 1.0),
+        ("settings", "/Settings/SystemSetup/AcInput1", 2.0),
+    ] {
+        let bus = pv_export_bus();
+        let mut controller = pv_export_controller(
+            &bus,
+            FakeStore::default(),
+            ControllerState::default(),
+            false,
+        );
+        controller.run_battery_current_once();
+        assert!(controller.state.pv_charge_export.owned());
+        bus.value(service, path, value);
+        controller.run_battery_current_once();
+        assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None, "{path}");
+        assert!(!controller.state.pv_charge_export.owned(), "{path}");
+    }
+}
+
+#[test]
+fn pv_export_foreign_override_and_changed_gui_setting_are_preserved() {
+    let bus = pv_export_bus();
+    bus.value(EXPORT_OWNER, EXPORT_PATH, -300.0);
+    let mut controller = pv_export_controller(
+        &bus,
+        FakeStore::default(),
+        ControllerState::default(),
+        false,
+    );
+    let result = controller.run_battery_current_once();
+    assert_eq!(
+        result.charge_unenforced_reason.as_deref(),
+        Some("grid_override_owned_externally")
+    );
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), Some(-300.0));
+
+    let bus = pv_export_bus();
+    let mut controller = pv_export_controller(
+        &bus,
+        FakeStore::default(),
+        ControllerState::default(),
+        false,
+    );
+    controller.run_battery_current_once();
+    bus.value("settings", "/Settings/CGwacs/AcPowerSetPoint", 200.0);
+    controller.run_battery_current_once();
+    controller.run_battery_current_once();
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None);
+    assert_eq!(
+        bus.number("settings", "/Settings/CGwacs/AcPowerSetPoint"),
+        Some(200.0)
+    );
+}
+
+#[test]
+fn pv_export_shutdown_does_not_erase_an_external_override() {
+    let bus = pv_export_bus();
+    let mut controller = pv_export_controller(
+        &bus,
+        FakeStore::default(),
+        ControllerState::default(),
+        false,
+    );
+    controller.run_battery_current_once();
+    bus.value(EXPORT_OWNER, EXPORT_PATH, -250.0);
+    controller.shutdown();
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), Some(-250.0));
+}
+
+#[test]
+fn pv_export_crash_before_and_after_write_recovers_without_replaying_stale_pv() {
+    for effect in [ScriptEffect::CrashBefore, ScriptEffect::CrashAfter] {
+        let bus = pv_export_bus();
+        let store = FakeStore::default();
+        let mut controller =
+            pv_export_controller(&bus, store.clone(), ControllerState::default(), false);
+        bus.script([ScriptStep::new(
+            FakeDbusOperation::WriteFloat,
+            EXPORT_OWNER,
+            EXPORT_PATH,
+            effect,
+        )]);
+        assert!(catch_unwind(AssertUnwindSafe(|| controller.run_battery_current_once())).is_err());
+        bus.assert_script_complete();
+        let saved = store.latest_state();
+        assert!(saved.pv_charge_export.pending.is_some());
+        let mut rebooted = pv_export_controller(&bus, store, saved, false);
+        // Even with the same high-current sample, clear on recovery before a fresh cycle.
+        rebooted.run_battery_current_once();
+        assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None);
+        bus.value("system", DC_PV_POWER_PATH, 0.0);
+        rebooted.run_battery_current_once();
+        assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None);
+    }
+}
+
+#[test]
+fn pv_export_shadow_never_writes_including_loaded_ownership_and_shutdown() {
+    let bus = pv_export_bus();
+    let mut active = pv_export_controller(
+        &bus,
+        FakeStore::default(),
+        ControllerState::default(),
+        false,
+    );
+    active.run_battery_current_once();
+    let state = active.state.clone();
+    let before = bus.writes();
+    let mut shadow = pv_export_controller(&bus, FakeStore::default(), state, true);
+    shadow.run_battery_current_once();
+    shadow.shutdown();
+    assert_eq!(bus.writes(), before);
+}
+
+#[test]
+fn pv_export_write_failure_keeps_recoverable_pending_intent() {
+    let bus = pv_export_bus();
+    let store = FakeStore::default();
+    let mut controller =
+        pv_export_controller(&bus, store.clone(), ControllerState::default(), false);
+    bus.script([ScriptStep::new(
+        FakeDbusOperation::WriteFloat,
+        EXPORT_OWNER,
+        EXPORT_PATH,
+        ScriptEffect::FailTransport,
+    )]);
+    let status = controller.run_battery_current_once();
+    assert_eq!(
+        status.pv_export_state.as_deref(),
+        Some("grid_override_write_failed")
+    );
+    assert!(store.latest_state().pv_charge_export.pending.is_some());
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None);
+    controller.run_battery_current_once();
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), Some(-1200.0));
+}
+
+#[test]
+fn pv_export_restart_with_feature_disabled_releases_only_own_override() {
+    let bus = pv_export_bus();
+    let mut controller = pv_export_controller(
+        &bus,
+        FakeStore::default(),
+        ControllerState::default(),
+        false,
+    );
+    controller.run_battery_current_once();
+    let state = controller.state.clone();
+    let mut restarted = Controller::new(
+        bus.clone(),
+        FakeStore::default(),
+        clock(7, 1, 12, 1000.0),
+        FakeLog::default(),
+        config(false),
+        state,
+    );
+    restarted.run_once();
+    assert_eq!(bus.number(EXPORT_OWNER, EXPORT_PATH), None);
 }
 
 #[test]

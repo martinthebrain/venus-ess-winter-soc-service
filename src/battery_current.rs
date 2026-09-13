@@ -10,6 +10,9 @@ pub struct BatteryCurrentStatus {
     pub configured_charge_current_a: Option<f64>,
     pub applied_charge_current_a: Option<f64>,
     pub charge_unenforced_reason: Option<String>,
+    pub pv_export_setpoint_w: Option<f64>,
+    pub pv_export_state: Option<String>,
+    pub measured_charge_current_a: Option<f64>,
     pub generated_at: f64,
     pub enabled: bool,
     pub configured_current_a: Option<f64>,
@@ -39,6 +42,7 @@ pub struct CurrentFeedback {
     last_increase: Option<f64>,
     last_sample: Option<f64>,
     last_constraint: Option<f64>,
+    last_pv_w: f64,
 }
 
 impl CurrentFeedback {
@@ -76,6 +80,7 @@ impl CurrentFeedback {
             status.power_constraint_w = Some(0.0);
             status.reason = Some("battery_telemetry_unavailable");
             self.last_constraint = Some(0.0);
+            self.last_pv_w = 0.0;
             return status;
         };
         let gap = self.last_sample.is_none_or(|last| {
@@ -88,6 +93,8 @@ impl CurrentFeedback {
         }
         self.last_sample = Some(sample.monotonic_now);
         let pv = status.dc_pv_power_w.unwrap_or(0.0);
+        let added_pv_allowance = (pv - self.last_pv_w).max(0.0) * config.inverter_efficiency;
+        self.last_pv_w = pv;
         if status.dc_pv_power_w.is_none() && status.reason.is_none() {
             status.reason = Some("dc_pv_unavailable_no_pv_allowance");
         }
@@ -114,7 +121,10 @@ impl CurrentFeedback {
         constraint = (constraint / config.power_step_w).floor() * config.power_step_w;
         if let Some(previous) = self.last_constraint {
             if constraint > previous && !increase_due {
-                constraint = previous;
+                // Slow recovery applies to battery power, not to new PV power.
+                let pv_only_increase =
+                    (added_pv_allowance / config.power_step_w).floor() * config.power_step_w;
+                constraint = constraint.min(previous + pv_only_increase);
             }
         }
         if increase_due {
@@ -177,7 +187,7 @@ mod tests {
             feedback
                 .evaluate(&enabled(), sample(-20.0, Some(2000.0), 5.0))
                 .power_constraint_w,
-            Some(3250.0)
+            Some(5050.0)
         );
         for time in [10.0, 15.0, 20.0, 25.0] {
             feedback.evaluate(&enabled(), sample(-20.0, Some(2000.0), time));

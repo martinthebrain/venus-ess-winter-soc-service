@@ -72,6 +72,27 @@ pub trait DbusPort {
     ///
     /// Returns a boundary error when the bus request or conversion fails.
     fn raw_number(&mut self, service: &str, path: &str) -> Result<Option<f64>, PortError>;
+    /// Read a nullable override, distinguishing a valid empty value from a failed read.
+    ///
+    /// # Errors
+    /// Returns a boundary error for missing paths, invalid types, or transport failures.
+    fn nullable_number(&mut self, service: &str, path: &str) -> Result<Option<f64>, PortError> {
+        self.raw_number(service, path)
+    }
+    /// Resolve the unique owner so volatile controls cannot survive a service replacement.
+    ///
+    /// # Errors
+    /// Returns a boundary error if the service cannot be resolved.
+    fn service_owner(&mut self, _service: &str) -> Result<String, PortError> {
+        Err(PortError::new("DBus owner", "owner resolution unavailable"))
+    }
+    /// Clear a nullable Venus override.
+    ///
+    /// # Errors
+    /// Returns a boundary error if the clear request cannot be performed.
+    fn clear_value(&mut self, _service: &str, _path: &str) -> Result<(), PortError> {
+        Err(PortError::new("DBus clear", "nullable writes unavailable"))
+    }
     /// Read a textual Venus value, treating an empty value as absent.
     ///
     /// # Errors
@@ -93,6 +114,11 @@ pub trait DbusPort {
 }
 
 pub trait StatePort {
+    /// Journal a volatile actor without enqueuing any persistent storage writes.
+    ///
+    /// # Errors
+    /// Returns an error if the RAM journal cannot be atomically replaced.
+    fn save_volatile(&mut self, state: &ControllerState) -> Result<(), String>;
     /// Re-evaluate the seasonal SD window and optionally restore newer state.
     ///
     /// # Errors

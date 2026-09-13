@@ -15,5 +15,6 @@ pub mod minimum_soc_control;
 pub mod persistence;
 pub mod policy;
 pub mod ports;
+pub mod pv_charge_export;
 pub mod runtime;
 pub mod storage;

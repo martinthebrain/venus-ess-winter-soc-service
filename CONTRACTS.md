@@ -199,12 +199,32 @@ UTC clock.
   still-needed low-SoC constraint, otherwise restoring the external baseline.
 - Charging uses an additional constraint in the existing DVCC arbiter, not a
   second writer. Reserve and routine controls cannot clear this constraint.
-  Native DVCC/BMS restrictions remain authoritative. DC-PV feed-in bypass and
-  disabled/unknown DVCC are explicitly reported as unenforced charging limits;
-  the service does not alter these settings or claim a hardware guarantee.
+  Native DVCC/BMS restrictions remain authoritative. Disabled/unknown DVCC
+  is reported, never silently enabled.
+- With DC-PV feed-in enabled, the charge controller requests additional grid
+  export using the supported volatile mode-2 `hub4 /Overrides/Setpoint`.
+  It never changes feed-in permissions, the user's grid setpoint/export limit,
+  ESS mode, or MPPT current limits. No additional export is requested without
+  valid signed battery current, voltage, DC-PV and complete grid measurements.
+  Grid connection, an inactive Dynamic ESS/scheduled override and a valid SoC
+  above the reserve are required. BMS and actual GUI current limits win.
+- Only an empty override is acquired. A boot/unique-service-bound RAM-only
+  write-ahead record covers each change, followed by exact readback. Neither
+  pending nor active override ownership enters the persistent state subset.
+  A process restart clears a recovered own override before a fresh request;
+  an unapplied old request is never replayed. Foreign overrides are retained.
+  A changed user grid setpoint releases the override and latches external
+  control until the high-current episode ends. Normal shutdown and explicit
+  cleanup clear only a still-owned override. Shadow never writes or clears it.
+- Disappearing PV, signed battery discharge, invalid telemetry or a competing
+  ESS controller withdraw the own export request. Current excursions while
+  ESS settles or export/inverter limits bind remain visible in diagnostics;
+  PV is not curtailed to force this operating limit. On transport failure,
+  cleanup is retried when communication returns. Unsupervised process death
+  cannot guarantee removal of a volatile override until recovery.
 - The enabled lightweight cycle reads current telemetry without replaying the
   seasonal policy. All setting writes, including its recovery paths, obey
-  shadow mode, durable intent and readback requirements.
+  shadow mode, the applicable durable/RAM intent and readback requirements.
 - DC-PV allowances expire with the current read. Current/voltage/BMS telemetry
   failures request 0 W instead of retaining a permissive old allowance.
 - The discharge actor is an ESS grid-connected inverter power limit, not a

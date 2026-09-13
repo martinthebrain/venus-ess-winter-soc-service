@@ -8,6 +8,8 @@ pub(crate) const PV_CHANNEL_MASK: u8 = 0x7f;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ControllerState {
+    /// RAM-only ownership of a volatile ESS override, bound to boot and bus owner.
+    pub pv_charge_export: crate::pv_charge_export::ExportState,
     pub pv_history: Vec<f64>,
     pub pv_expected_channels: u8,
     pub last_balance_ts: f64,
@@ -76,6 +78,7 @@ pub struct ControllerState {
 impl Default for ControllerState {
     fn default() -> Self {
         Self {
+            pv_charge_export: crate::pv_charge_export::ExportState::default(),
             pv_history: Vec::new(),
             pv_expected_channels: 0,
             last_balance_ts: 0.0,

@@ -59,10 +59,22 @@ Optional battery current limiting is disabled by default. In `config.env` set
 both default to 75 A. Restart the service after changing configuration.
 
 Charging uses the existing single-owner DVCC arbiter. Lower GUI, reserve,
-routine-SoC and BMS limits retain priority. **DC-PV excess feed-in bypasses
-DVCC's MPPT current limiting** on VE.Bus ESS systems, so the charging limit
-cannot be guaranteed with that option enabled or with uncontrolled chargers.
-The service reports this incompatibility; it never changes feed-in settings.
+routine-SoC and BMS limits retain priority. With DC-PV excess feed-in enabled,
+VE.Bus ESS bypasses DVCC's MPPT current limiting. The service then requests
+additional export through the volatile mode-2 `/Overrides/Setpoint` on
+`com.victronenergy.hub4` when measured battery charging exceeds its target.
+It does not disable feed-in or curtail PV. The user's grid setpoint, export
+limit and PV settings are never changed. Dynamic ESS, scheduled charging,
+generator/island operation and another occupied override prevent takeover.
+The override is withdrawn on missing telemetry, disappearing PV, battery
+discharge, normal shutdown and recovery of a previously owned override.
+Its write-ahead record is RAM-only, bound to the boot and unique ESS owner;
+this feature requires the default tmpfs runtime directory or another tmpfs.
+Readback is verified and external changes cause ownership to be relinquished.
+Like the existing controls, recovery after an abnormal process exit depends
+on the supervisor restarting the service; a bus failure can delay cleanup.
+Insufficient inverter/export capacity or unavailable control is reported:
+the charge limit is not a guarantee that excess PV can always be exported.
 
 Discharging combines measured battery voltage, DC-PV power, current feedback
 and a configurable conversion margin into `MaxDischargePower`. AC-PV is not
@@ -70,8 +82,9 @@ added to this allowance. The tighter low-SoC or external limit always wins.
 Missing DC-PV gives no PV allowance; missing battery voltage/current/BMS DCL
 requests zero inverter power, provided the actuator and nominal rating are
 available. The five-second lightweight loop leaves the seasonal loop at its
-normal cadence. Power is quantized down in 50 W steps and increases wait
-30 seconds; decreases do not wait for that interval.
+normal cadence. Power is quantized down in 50 W steps and increases in the
+battery allowance wait 30 seconds. Fresh additional DC-PV is allowed on the
+next cycle; decreases do not wait for that interval.
 
 These are operating limits, **not instantaneous hardware protection**.
 Measurement delay and ESS response can cause short current excursions.

@@ -51,6 +51,9 @@ use crate::policy::{
 use crate::ports::{DbusPort, PortError, StatePort};
 use std::time::Duration;
 
+#[path = "controller_pv_export.rs"]
+mod pv_export;
+
 const AC_CONSUMPTION_ON_INPUT: &str = "/Ac/ConsumptionOnInput/{phase}/Power";
 const AC_CONSUMPTION: &str = "/Ac/Consumption/{phase}/Power";
 const PHASE_PLACEHOLDER: &str = "{phase}";
@@ -234,6 +237,8 @@ where
     requested_max_discharge_power: Option<f64>,
     discharge_feedback: CurrentFeedback,
     discharge_limit_status: BatteryCurrentStatus,
+    pv_export_boot_id: String,
+    pv_export_recovery_pending: bool,
     charge_current_ceiling_active: bool,
     charge_current_ceiling_unenforced_reason: Option<ChargeCurrentCeilingUnavailableReason>,
     last_charge_current_ceiling_unenforced_log:
@@ -270,6 +275,11 @@ where
         state: ControllerState,
     ) -> Self {
         Self {
+            pv_export_boot_id: std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+            pv_export_recovery_pending: state.pv_charge_export.owned(),
             dbus,
             store,
             clock,
@@ -328,6 +338,13 @@ where
     }
 
     pub fn run_once(&mut self) -> CycleDecision {
+        let mut decision = self.run_policy_once();
+        self.update_pv_charge_export();
+        decision.battery_current_limit = self.battery_current_status();
+        decision
+    }
+
+    fn run_policy_once(&mut self) -> CycleDecision {
         self.begin_cycle();
         let now = self.clock.local_date_time();
         let generated_at = self.clock.epoch_seconds();
@@ -445,6 +462,10 @@ where
             "Shutdown requested; restoring the owned MaxChargeCurrent baseline while retaining MinSoC and discharge protection",
         );
         self.dbus.begin_cycle();
+        if let Err(error) = self.release_pv_export_override() {
+            self.logger
+                .log(&format!("Volatile PV export cleanup pending: {error}"));
+        }
         if self.config.shadow {
             self.logger
                 .log("Shadow: MaxChargeCurrent baseline left unchanged during shutdown");
@@ -478,6 +499,9 @@ where
         let mut failures = Vec::new();
 
         self.dbus.begin_cycle();
+        if let Err(error) = self.release_pv_export_override() {
+            failures.push(error);
+        }
         self.restore_owned_charge_current(now, now_ts);
         if self.state.charge_current_control.owned
             || self.state.charge_current_control.pending_write.is_some()
@@ -1284,6 +1308,12 @@ where
 
     /// Run only the enabled current regulators between full seasonal cycles.
     pub fn run_battery_current_once(&mut self) -> BatteryCurrentStatus {
+        self.run_battery_current_policy_once();
+        self.update_pv_charge_export();
+        self.battery_current_status()
+    }
+
+    fn run_battery_current_policy_once(&mut self) -> BatteryCurrentStatus {
         if !self.config.battery_current.enabled {
             return BatteryCurrentStatus::default();
         }

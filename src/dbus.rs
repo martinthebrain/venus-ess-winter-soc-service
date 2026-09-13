@@ -247,6 +247,31 @@ impl DbusPort for VenusDbus {
         self.number(service, path)
     }
 
+    fn nullable_number(&mut self, service: &str, path: &str) -> Result<Option<f64>, PortError> {
+        let value = self.value(service, path)?;
+        nullable_number(&value).map_err(|()| {
+            PortError::classified(DbusFailureKind::TypeMismatch, "DBus nullable number", path)
+        })
+    }
+
+    fn service_owner(&mut self, service: &str) -> Result<String, PortError> {
+        self.call("DBus owner", |connection| {
+            let proxy = Proxy::new(
+                connection,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+            )?;
+            proxy.call("GetNameOwner", &(service,))
+        })
+    }
+
+    fn clear_value(&mut self, service: &str, path: &str) -> Result<(), PortError> {
+        let empty = OwnedValue::try_from(zbus::zvariant::Value::from(Vec::<i32>::new()))
+            .map_err(|error| PortError::new("DBus clear", error.to_string()))?;
+        self.set_value(service, path, &empty)
+    }
+
     fn text(&mut self, service: &str, path: &str) -> Result<Option<String>, PortError> {
         let value = self.value(service, path)?;
         owned_text(&value).map_err(|()| {
@@ -285,6 +310,16 @@ fn owned_number(value: &OwnedValue) -> Option<f64> {
         .or_else(|| u64::try_from(value).ok().and_then(u64_to_exact_f64))
         .or_else(|| i32::try_from(value).ok().map(f64::from))
         .or_else(|| u32::try_from(value).ok().map(f64::from))
+}
+
+fn nullable_number(value: &OwnedValue) -> Result<Option<f64>, ()> {
+    if <&Array<'_>>::try_from(value).is_ok_and(Array::is_empty) {
+        return Ok(None);
+    }
+    owned_number(value)
+        .filter(|v| v.is_finite())
+        .map(Some)
+        .ok_or(())
 }
 
 fn owned_text(value: &OwnedValue) -> Result<Option<String>, ()> {

@@ -513,6 +513,22 @@ impl StateRepository {
 }
 
 impl StatePort for StateRepository {
+    fn save_volatile(&mut self, state: &ControllerState) -> Result<(), String> {
+        // A grid override changes frequently; never journal it to flash or SD,
+        // even if an administrator selected a non-default state directory.
+        let filesystem =
+            rustix::fs::statfs(&self.config.runtime_dir).map_err(|error| error.to_string())?;
+        if filesystem.f_type != 0x0102_1994 {
+            return Err("volatile grid override requires a tmpfs runtime directory".to_owned());
+        }
+        let value = state_value_with_generation(
+            state,
+            &self.config.state_device_id,
+            self.durable_generation,
+        )?;
+        let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+        atomic_write(&self.config.state_file, &bytes, false).map_err(|error| error.to_string())
+    }
     fn refresh_window(
         &mut self,
         state: &mut ControllerState,
@@ -629,6 +645,9 @@ fn validate_state_value(
 }
 
 fn validate_controller_state(state: &ControllerState, now_ts: f64) -> Result<(), String> {
+    if !state.pv_charge_export.valid() {
+        return Err("invalid volatile PV export ownership".to_owned());
+    }
     validate_persisted_times(state, now_ts)?;
     validate_balancing_state(state)?;
     validate_charge_state(state)?;
@@ -1733,6 +1752,30 @@ mod tests {
     use serde_json::{Map, Value, json};
     use std::fs;
     use std::time::Duration;
+
+    #[test]
+    fn volatile_export_ownership_roundtrips_in_ram_but_never_enters_durable_subset() {
+        let mut state = ControllerState::default();
+        state.pv_charge_export.boot_id = "00000000-0000-0000-0000-000000000000".to_owned();
+        state.pv_charge_export.service_owner = ":1.20".to_owned();
+        state.pv_charge_export.prepare(None, Some(-1200.0), 50.0);
+        assert!(state.pv_charge_export.valid());
+        let encoded =
+            state_value(&state, "volatile-test").unwrap_or_else(|_| std::process::abort());
+        let decoded: ControllerState =
+            serde_json::from_value(encoded.clone()).unwrap_or_else(|_| std::process::abort());
+        assert_eq!(decoded.pv_charge_export, state.pv_charge_export);
+        for mmdd in [701, 1101, 1201] {
+            let signature = sd_signature(
+                &PolicyConfig::default(),
+                &encoded,
+                mmdd,
+                true,
+                "volatile-test",
+            );
+            assert!(!signature.contains_key("pv_charge_export"));
+        }
+    }
 
     fn repository_config(root: &std::path::Path) -> RuntimeConfig {
         RuntimeConfig {

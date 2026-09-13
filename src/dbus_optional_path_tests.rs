@@ -145,6 +145,60 @@ fn read_cycle(dbus: &mut VenusDbus, service: &str) -> Result<Option<f64>, PortEr
     dbus.measurement(service, BMS_ALLOW_TO_CHARGE_PATH)
 }
 
+struct NullableOverride(Arc<Mutex<Option<f64>>>);
+
+#[zbus::interface(name = "com.victronenergy.BusItem")]
+impl NullableOverride {
+    fn get_value(&self) -> zbus::fdo::Result<OwnedValue> {
+        let value = *self
+            .0
+            .lock()
+            .map_err(|_| zbus::fdo::Error::Failed("lock".to_owned()))?;
+        value.map_or_else(
+            || {
+                OwnedValue::try_from(zbus::zvariant::Value::from(Vec::<i32>::new()))
+                    .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+            },
+            |value| Ok(OwnedValue::from(value)),
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)] // D-Bus method payload is deserialized by value.
+    fn set_value(&self, value: OwnedValue) -> zbus::fdo::Result<i32> {
+        let next = super::nullable_number(&value)
+            .map_err(|()| zbus::fdo::Error::InvalidArgs("not nullable numeric".to_owned()))?;
+        *self
+            .0
+            .lock()
+            .map_err(|_| zbus::fdo::Error::Failed("lock".to_owned()))? = next;
+        Ok(0)
+    }
+}
+
+#[test]
+fn volatile_override_uses_unique_owner_and_native_empty_array_clear() -> TestResult {
+    let bus = TestBus::start()?;
+    let hub = "com.victronenergy.hub4";
+    let path = "/Overrides/Setpoint";
+    let value = Arc::new(Mutex::new(None));
+    let server = Builder::address(bus.address.as_str())?
+        .name(hub)?
+        .serve_at(path, NullableOverride(Arc::clone(&value)))?
+        .build()?;
+    let mut client = bus.client()?;
+    let owner = client.service_owner(hub)?;
+    assert!(owner.starts_with(':'));
+    assert_eq!(client.nullable_number(&owner, path)?, None);
+    client.write_float(&owner, path, -1200.0)?;
+    assert_eq!(client.nullable_number(&owner, path)?, Some(-1200.0));
+    client.clear_value(&owner, path)?;
+    assert_eq!(client.nullable_number(&owner, path)?, None);
+    server.close()?;
+    client.begin_cycle();
+    assert!(client.nullable_number(&owner, path).is_err());
+    Ok(())
+}
+
 #[test]
 fn missing_optional_path_is_only_probed_once_per_verified_owner() -> TestResult {
     let bus = TestBus::start()?;
