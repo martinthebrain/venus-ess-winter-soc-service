@@ -320,7 +320,12 @@ UTC clock.
 - Full runtime state remains in RAM at
   `/dev/shm/venus-ess-winter-soc-service/state.json` inside a `0700` directory.
 - State documents retain the established controller fields and add an exact
-  schema version plus a stable device identity. Wrong-device, future-dated,
+  schema version plus a stable device identity. Identity uses an explicit
+  `ESS_STATE_DEVICE_ID`, otherwise the device-tree board serial, otherwise
+  `/etc/machine-id`. The volatile Venus `/var/lib/dbus/machine-id` is not an
+  identity source. Existing deployments must pin their verified identity in
+  persistent `config.env` before upgrading; foreign state is never automatically
+  adopted. Identity selection performs no persistent writes. Wrong-device, future-dated,
   structurally invalid, or semantically unsafe state is rejected before merge.
 - A root-owned legacy RAM document at the former default path may be imported
   once through the same semantic validator; unbound removable state is rejected.

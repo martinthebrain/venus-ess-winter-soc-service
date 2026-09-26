@@ -2935,6 +2935,81 @@ mod tests {
     }
 
     #[test]
+    fn pinned_identity_restores_both_current_limit_baselines_without_ram() {
+        let root = tempfile::tempdir().unwrap_or_else(|_| std::process::abort());
+        let mut config = repository_config(root.path());
+        config.state_device_id = "pinned-installation-id".to_owned();
+        let sd_directory = config
+            .sd_path
+            .as_ref()
+            .map_or_else(|| std::process::abort(), |path| path.join("socSteuerung"));
+        fs::create_dir_all(&sd_directory).unwrap_or_else(|_| std::process::abort());
+        fs::write(
+            sd_directory.join("ess_winter_logic.json"),
+            state_document(
+                &config,
+                json!({
+                "ts": 100.0,
+                "durable_generation": 20,
+                "nominal_inverter_power_last": 13500.0,
+                "nominal_inverter_power_service": "com.victronenergy.vebus.test",
+                "nominal_inverter_power_observed_at": 100.0,
+                "charge_current_control": {
+                        "battery_constraint_a": 90.0,
+                        "external_baseline_a": -1.0,
+                        "owned": true,
+                        "last_effectively_written_a": 90.0,
+                        "write_generation": 1
+                    },
+                    "discharge_protection": {
+                        "active": true,
+                        "current_limit_managed": true,
+                        "restore_default": true,
+                        "last_set_power_w": 3900.0,
+                        "last_observed_power_w": 3900.0,
+                        "write_generation": 6
+                    }
+                }),
+            ),
+        )
+        .unwrap_or_else(|_| std::process::abort());
+        assert!(!config.state_file.exists());
+        let mut repository = StateRepository::new(config).unwrap_or_else(|_| std::process::abort());
+        let mut state = repository
+            .initialize(summer_date(), 110.0, 1.0)
+            .unwrap_or_else(|_| std::process::abort());
+        let warnings = repository.take_recovery_warnings();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(state.charge_current_control.owned);
+        assert_eq!(state.charge_current_control.external_baseline_a, Some(-1.0));
+        assert_eq!(
+            state.charge_current_control.last_effectively_written_a,
+            Some(90.0)
+        );
+        assert!(state.discharge_protection.restore_default);
+        assert_eq!(state.discharge_protection.restore_power_w, None);
+        assert_eq!(state.discharge_protection.last_set_power_w, Some(3900.0));
+        let decision = crate::discharge_protection::evaluate_current_limited(
+            &PolicyConfig::default(),
+            &mut state.discharge_protection,
+            crate::discharge_protection::ProtectionInput {
+                soc: 56.0,
+                battery_power_w: Some(100.0),
+                current_limit_w: Some(3900.0),
+                nominal_inverter_power_w: Some(13500.0),
+                monotonic_now: 2.0,
+            },
+            Some(6500.0),
+        );
+        assert_eq!(
+            decision.action,
+            Some(crate::discharge_protection::ProtectionAction::Restrict(
+                6500.0
+            ))
+        );
+    }
+
+    #[test]
     fn corrupt_sd_never_discards_valid_ram_state() {
         let root = tempfile::tempdir().unwrap_or_else(|_| std::process::abort());
         let config = repository_config(root.path());

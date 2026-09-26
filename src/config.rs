@@ -1084,12 +1084,24 @@ fn validate_runtime_paths(
 }
 
 fn state_device_id() -> Result<String, ConfigError> {
-    if let Some(configured) = env_text("ESS_STATE_DEVICE_ID") {
-        return validate_device_id(&configured, "ESS_STATE_DEVICE_ID");
+    resolve_state_device_id(env_text("ESS_STATE_DEVICE_ID").as_deref(), read_small_text)
+}
+
+fn resolve_state_device_id(
+    configured: Option<&str>,
+    mut read: impl FnMut(&str) -> Option<String>,
+) -> Result<String, ConfigError> {
+    if let Some(configured) = configured {
+        return validate_device_id(configured, "ESS_STATE_DEVICE_ID");
     }
-    for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
-        if let Some(value) = read_small_text(path) {
-            return validate_device_id(&value, path);
+    // Venus OS can regenerate /var/lib/dbus/machine-id on every boot.
+    // Device-tree strings are NUL-terminated; the board serial is not boot-local.
+    for path in [
+        "/sys/firmware/devicetree/base/serial-number",
+        "/etc/machine-id",
+    ] {
+        if let Some(value) = read(path) {
+            return validate_device_id(value.trim_end_matches('\0'), path);
         }
     }
     Err(ConfigError(
@@ -1365,9 +1377,68 @@ mod tests {
     use super::{
         CHARGE_CEILING_CURRENT_EPSILON_A, FULL_CHARGE_CONFIRM_SECONDS,
         FULL_CHARGE_MAX_SAMPLE_GAP_SECONDS, FULL_CHARGE_MIN_AGE_DAYS, FULL_CHARGE_REACHED_SOC,
-        FULL_MAX_CHARGE_SOC, PolicyConfig, ROUTINE_MAX_CHARGE_SOC, parse_flag, valid_mmdd,
+        FULL_MAX_CHARGE_SOC, PolicyConfig, ROUTINE_MAX_CHARGE_SOC, parse_flag,
+        resolve_state_device_id, valid_mmdd,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn pinned_state_identity_survives_changed_boot_identifiers() {
+        for boot_id in ["boot-one", "boot-two"] {
+            assert_eq!(
+                resolve_state_device_id(Some("existing-device-id"), |_| Some(boot_id.to_owned())),
+                Ok("existing-device-id".to_owned())
+            );
+        }
+        assert!(
+            resolve_state_device_id(Some("invalid identity"), |_| Some("valid".to_owned()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn hardware_state_identity_is_independent_of_dbus_and_machine_ids() {
+        for boot_id in ["boot-one", "boot-two"] {
+            assert_eq!(
+                resolve_state_device_id(None, |path| Some(if path.ends_with("serial-number") {
+                    "board-serial\0".to_owned()
+                } else {
+                    boot_id.to_owned()
+                })),
+                Ok("board-serial".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn dbus_only_state_identity_is_rejected_instead_of_losing_ownership_on_reboot() {
+        assert!(
+            resolve_state_device_id(None, |path| {
+                (path == "/var/lib/dbus/machine-id").then(|| "volatile-id".to_owned())
+            })
+            .is_err()
+        );
+        assert_eq!(
+            resolve_state_device_id(None, |path| {
+                (path == "/etc/machine-id").then(|| "linux-machine-id\n".to_owned())
+            }),
+            Ok("linux-machine-id".to_owned())
+        );
+    }
+
+    #[test]
+    fn malformed_hardware_identity_never_silently_changes_identity_source() {
+        for serial in ["\0", "serial\0suffix", "invalid serial"] {
+            assert!(
+                resolve_state_device_id(None, |path| Some(if path.ends_with("serial-number") {
+                    serial.to_owned()
+                } else {
+                    "other-identity".to_owned()
+                }))
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn policy_defaults_are_preserved_without_overrides() {
